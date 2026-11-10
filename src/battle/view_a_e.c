@@ -38,7 +38,7 @@ extern void LipSync_Update(void);
 extern s32 LipSync_IsOpen(void); /* non-zero while a voice line plays */
 
 /* Defined here: this object's .sdata (0x2FF10C). */
-ViewProgress *gProgress = NULL;
+ViewProgress *Port_Progress = NULL;
 
 /* Allocates the progress block and the three buffers of the loading screen. */
 void Progress_Init(void) {

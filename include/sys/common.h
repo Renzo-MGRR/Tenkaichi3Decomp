@@ -24,5 +24,6 @@ extern CommonRes *gCommonRes;
 void Common_LoadBoot(void);
 void Common_Reload(void);
 void Common_Init(void);
+s32 Common_BootSize(void);
 
 #endif

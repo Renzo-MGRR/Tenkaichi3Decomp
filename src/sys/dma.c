@@ -30,20 +30,48 @@ void Dma_InitBuffers(void) {
 
 /* Copies `size` bytes (whole quadwords) of ready-made packet data to the display list. */
 void Dma_AddData(void *src, s32 size) {
+#if defined(PORT_PS3)
+    /* The packet builders store each 64-bit GS field as two u32 words in little-endian (PS2) order.
+       The CELL is big-endian and the chain walker/GIF parser read those fields as native u64s, so
+       exchange the two words of every doubleword after the 16-byte DMA tag. (A 0x10 packet is a
+       bare DMA tag and is copied unchanged.) */
+    u32 *dst = gDmaCur;
+    const u32 *s = (const u32 *)src;
+    s32 i, n = size / 4;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = s[i];
+    }
+    for (i = 4; i + 1 < n; i += 2) {
+        u32 t = dst[i];
+        dst[i] = dst[i + 1];
+        dst[i + 1] = t;
+    }
+    gDmaCur = (u32 *)((u8 *)gDmaCur + size / 16 * 16);
+#else
     memcpy(gDmaCur, src, size);
     gDmaCur = (u32 *)((u8 *)gDmaCur + size / 16 * 16);
+#endif
 }
 
 /* Appends a REF tag: sends `size` bytes that live at `addr` without copying them. */
-void Dma_AddRef(void *addr, s32 size) {
+static void Dma_AddRefMarked(void *addr, s32 size, u32 marker) {
     u32 *tag = gDmaCur;
 
     tag[0] = DMA_TAG_REF + size / 16;
     tag[1] = (u32)addr;
-    tag[2] = 0;
+    tag[2] = marker;
     tag[3] = 0;
     tag += 4;
     gDmaCur = tag;
+}
+
+void Dma_AddRef(void *addr, s32 size) {
+    Dma_AddRefMarked(addr, size, 0);
+}
+
+void Dma_AddRefLe(void *addr, s32 size) {
+    Dma_AddRefMarked(addr, size, DMA_REF_LE_MARKER);
 }
 
 /* Appends a NEXT tag that jumps to the chain at `addr`, and makes `retTag` point back to what follows. */
@@ -316,19 +344,29 @@ void Dma_SendGifNoWait(u32 addr, u32 qwc) {
 }
 
 /* Sends `qwc` quadwords at `addr` on the GIF channel and waits for the transfer to finish. */
+#if defined(PORT_PS3)
+extern void Port_StageTrace(const char *what);
+#define DT(what) Port_StageTrace("Dma_SendGif: " what)
+#else
+#define DT(what) ((void)0)
+#endif
 void Dma_SendGif(u32 addr, u32 qwc) {
+    DT("wait idle");
     do {
         while (*D2_CHCR & 0x100) {
         }
     } while (*GIF_STAT & 0xC00);
+    DT("program channel");
     *D2_QWC = qwc;
     *D2_MADR = DMA_PHYS(addr);
     FlushCache(0);
     *D2_CHCR = 0x101;
+    DT("wait done");
     do {
         while (*D2_CHCR & 0x100) {
         }
     } while (*GIF_STAT & 0xC00);
+    DT("done");
 }
 
 /* Waits until the GIF channel and the GIF path are idle. */

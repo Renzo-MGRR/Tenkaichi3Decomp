@@ -4,10 +4,17 @@
 #include "types.h"
 
 /* EE hardware timers 0 and 1 used as a stopwatch, src/sys/timer.c = 0x11F190..0x11F548. */
-
+#if defined(PORT_PS3)
+/* PS3: these game addresses are backed by BSS (port_addr.h), not mapped at 0x10000000. */
+extern volatile u32 *Port_DmaReg(u32 addr);
+#define TIMER_COUNT(ch) (*Port_DmaReg(0x10000000u + (u32)(ch) * 0x800u)) /* Tn_COUNT */
+#define TIMER_MODE(ch) (*Port_DmaReg(0x10000010u + (u32)(ch) * 0x800u))  /* Tn_MODE */
+#define TIMER_COMP(ch) (*Port_DmaReg(0x10000020u + (u32)(ch) * 0x800u))  /* Tn_COMP */
+#else
 #define TIMER_COUNT(ch) (*(volatile u32 *)(0x10000000 + (ch) * 0x800)) /* Tn_COUNT */
 #define TIMER_MODE(ch) (*(volatile u32 *)(0x10000010 + (ch) * 0x800))  /* Tn_MODE */
 #define TIMER_COMP(ch) (*(volatile u32 *)(0x10000020 + (ch) * 0x800))  /* Tn_COMP */
+#endif
 
 /* Tn_MODE bits */
 #define TIMER_MODE_CLK_HBLANK 0x003 /* count horizontal blanks */

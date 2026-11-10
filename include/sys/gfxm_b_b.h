@@ -39,8 +39,14 @@ typedef struct TexEntry {
     /* 0x24 */ s32 cbpOfs;
     /* 0x28 */ u8 unk28[8];
     /* 0x30 */ u64 tex0;     /* TEX0 without the block pointers */
+#if defined(PORT_PS3)
+    /* 32-bit game address, decoded with Port_Ptr before DMA. */
+    /* 0x38 */ u32 pix;
+    /* 0x3C */ u32 clut;
+#else
     /* 0x38 */ void *pix;    /* set by Res_RelocateOffsets */
     /* 0x3C */ void *clut;
+#endif
 } TexEntry;
 
 /* Header of a texture file. */

@@ -26,7 +26,19 @@
 #include <string.h>
 #include <time.h>
 #include "gs_internal.h"
+#include "sys/gfx.h"
 #include "../port_addr.h"
+
+/* DMA tags carry native PPU pointers on PS3. These live in the ELF image/BSS
+   window, which overlaps the synthetic PS2 GS/low-memory address windows used
+   by Port_Ptr. Keep DMA pointers direct; translate guest-only addresses. */
+static const void *gs_dma_ptr(uint32_t addr) {
+#if defined(PORT_PS3)
+    if (addr >= 0x10000000u && addr < 0x20000000u)
+        return (const void *)(uintptr_t)addr;
+#endif
+    return Port_Ptr(addr);
+}
 
 #define SURF_W 1024
 #define SURF_H 1024
@@ -48,6 +60,29 @@ unsigned gGsFrame;
 #define sFrame gGsFrame
 static int sGpu; /* 1: the GPU back end draws (BT3_GS=gpu), 0: the software rasteriser below */
 
+static int sFinish;   /* the current transfer carried the display list's GS_FINISH */
+static unsigned sLists; /* display lists (transfers ending in GS_FINISH) seen so far */
+
+void Gs_Ps3InitState(void) {
+    gGs.frame[0] = GS_SET_FRAME(GFX_FBP_A, GFX_FBW, 0, 0);
+    gGs.frame[1] = GS_SET_FRAME(GFX_FBP_B, GFX_FBW, 0, 0);
+    gGs.xyoffset[0] = GS_SET_XYOFFSET(GFX_OFX, GFX_OFY);
+    gGs.xyoffset[1] = GS_SET_XYOFFSET(GFX_OFX, GFX_OFY);
+    gGs.scissor[0] = GS_SET_SCISSOR(0, GFX_WIDTH - 1, 0, GFX_HEIGHT - 1);
+    gGs.scissor[1] = GS_SET_SCISSOR(0, GFX_WIDTH - 1, 0, GFX_HEIGHT - 1);
+    gGs.zbuf[0] = GS_SET_ZBUF(GFX_ZBP, GS_PSMZ24, 0);
+    gGs.zbuf[1] = GS_SET_ZBUF(GFX_ZBP, GS_PSMZ24, 0);
+    gGs.test[0] = 0x50000;
+    gGs.test[1] = 0x50000;
+    gGs.alpha[0] = 0;
+    gGs.alpha[1] = 0;
+    gGs.primRaw = 0;
+    gGs.rgbaq = 0x80808080;
+    fprintf(stderr, "bt3: Gs_Ps3InitState xyoff=%016llx frame=%016llx\n",
+            (unsigned long long)gGs.xyoffset[0], (unsigned long long)gGs.frame[0]);
+    fflush(stderr);
+}
+
 static Target sTargets[16];
 static int sTargetCount;
 static unsigned sMissingTex;
@@ -56,6 +91,7 @@ static int sDrawFrom;       /* BT3_GS_FROM=<frame>: draw only from this frame on
 static int sProbeX = -1, sProbeY = -1;
 static int sDumpFrame = -1; /* BT3_GS_DUMP=<frame>: list that frame's primitives */
 static unsigned sStat[8]; /* per frame: DMA tags, VIF codes, DIRECT quadwords, GIF tags, register writes, vertices, image quadwords, unknown VIF */
+static unsigned sTriTested, sTriPassed; /* pixels the triangle walk looked at / kept */
 
 /* ---- GS local memory: 4 MB. A buffer pointer counts 256-byte blocks, a buffer width counts 64 pixels. Where a
    pixel lives depends on its format: pages of 32 blocks, blocks in a format-specific order inside the page,
@@ -361,6 +397,8 @@ static uint32_t texel(int ctx, int u, int v) {
 /* ------------------------------------------------------------------------------------------------ pixels */
 
 static void pixel(Target *sf, int ctx, int x, int y, uint32_t z, uint32_t src) {
+    static unsigned pxc = 0;
+    if (pxc < 5) { pxc++; fprintf(stderr, "bt3: pixel x=%d y=%d prim=%u xyoff=%llu\n", x, y, (unsigned)(gs.prim & 7), (unsigned long long)gs.xyoffset[ctx]); fflush(stderr); }
     uint64_t test = gs.test[ctx], al = gs.alpha[ctx], zb = gs.zbuf[ctx], pr = gs.prim;
     uint64_t sc = gs.scissor[ctx], fr = gs.frame[ctx];
     uint32_t fbp = (fr & 0x1FF) << 5, fbw = (fr >> 16) & 0x3F, fpsm = (fr >> 24) & 0x3F;
@@ -537,6 +575,25 @@ static void draw_triangle(Target *sf, int ctx, const Vertex *a, const Vertex *b,
     if (b->y > maxy) { maxy = b->y; } if (c->y > maxy) { maxy = c->y; }
     if (minx < 0) { minx = 0; } if (miny < 0) { miny = 0; }
     if (maxx > SURF_W - 1) { maxx = SURF_W - 1; } if (maxy > SURF_H - 1) { maxy = SURF_H - 1; }
+#if defined(PORT_PS3)
+    if (sFrame >= 44 && sFrame <= 47) {
+        static unsigned td;
+        if (td < 32) {
+            uint64_t t0 = gs.tex0[ctx], fr = gs.frame[ctx], zb = gs.zbuf[ctx];
+            fprintf(stderr, "bt3: TRI %u frame=%u (%d,%d)-(%d,%d) area=%.1f g=%d tme=%d abe=%d fst=%d "
+                            "tbp=%x psm=%x tw=%u th=%u cbp=%x fpsm=%x fbw=%u fbp=%x test=%llx zbuf=%llx alpha=%llx prim=%llx\n",
+                    td, sFrame, (int)minx, (int)miny, (int)maxx, (int)maxy, (double)area,
+                    (int)((gs.prim >> 3) & 1), (int)((gs.prim >> 4) & 1), (int)((gs.prim >> 6) & 1), (int)((gs.prim >> 8) & 1),
+                    (unsigned)(t0 & 0x3FFF), (unsigned)((t0 >> 20) & 0x3F), 1u << ((t0 >> 26) & 15), 1u << ((t0 >> 30) & 15),
+                    (unsigned)((t0 >> 37) & 0x3FFF), (unsigned)((fr >> 24) & 0x3F), (unsigned)((fr >> 16) & 0x3F),
+                    (unsigned)(fr & 0x1FF), (unsigned long long)gs.test[ctx], (unsigned long long)zb,
+                    (unsigned long long)gs.alpha[ctx], (unsigned long long)gs.prim);
+            fflush(stderr);
+            td++;
+        }
+    }
+#endif
+    sTriTested += (unsigned)((int)maxx - (int)minx + 1) * (unsigned)((int)maxy - (int)miny + 1);
     for (y = (int)miny; y <= (int)maxy; y++) {
         for (x = (int)minx; x <= (int)maxx; x++) {
             /* weights in double precision and results rounded, not truncated: with float weights that sum to just
@@ -548,6 +605,7 @@ static void draw_triangle(Target *sf, int ctx, const Vertex *a, const Vertex *b,
             if (w0 < 0.0 || w1 < 0.0 || w2 < -1e-9) {
                 continue;
             }
+            sTriPassed++;
             if (gouraud) {
                 col = (uint32_t)(a->r * w0 + b->r * w1 + c->r * w2 + 0.5) | (uint32_t)(a->g * w0 + b->g * w1 + c->g * w2 + 0.5) << 8 |
                       (uint32_t)(a->b * w0 + b->b * w1 + c->b * w2 + 0.5) << 16 | (uint32_t)(a->a * w0 + b->a * w1 + c->a * w2 + 0.5) << 24;
@@ -649,8 +707,20 @@ static void vertex(uint32_t x, uint32_t y, uint32_t z, int kick) {
         return;
     }
     sStat[5]++;
-    v.x = ((float)(int)x - (float)(gs.xyoffset[ctx] & 0xFFFF)) / 16.0f;
-    v.y = ((float)(int)y - (float)((gs.xyoffset[ctx] >> 32) & 0xFFFF)) / 16.0f;
+    {
+        /* Subtract the 12.4 offset in integers first: converting the 64-bit register fields to float
+           has silently returned 0 in this toolchain, which left every vertex at raw/16. */
+        uint32_t ofx = (uint32_t)gs.xyoffset[ctx] & 0xFFFFu;
+        uint32_t ofy = (uint32_t)(gs.xyoffset[ctx] >> 32) & 0xFFFFu;
+        int ix = (int)x - (int)ofx, iy = (int)y - (int)ofy;
+        v.x = (float)ix / 16.0f;
+        v.y = (float)iy / 16.0f;
+#if defined(PORT_PS3)
+        { static unsigned vc = 0; if (vc < 10) { unsigned qx, qy; memcpy(&qx, &v.x, 4); memcpy(&qy, &v.y, 4); vc++;
+          fprintf(stderr, "bt3: vertex frame=%u prim=%02x ctx=%d raw=%u,%u of=%u,%u i=%d,%d -> %08x,%08x kick=%d xyoff=%016llx\n",
+                  sFrame, (unsigned)gs.prim, ctx, x, y, ofx, ofy, ix, iy, qx, qy, kick, (unsigned long long)gs.xyoffset[ctx]); fflush(stderr); } }
+#endif
+    }
     v.z = z;
     {   /* a seam's vertex: where it was before the rounding (Port_SeamExact) */
         float fx, fy;
@@ -806,6 +876,7 @@ static void transfer_data(const uint8_t *p, uint32_t bytes) {
        textures again and again in every frame: this loop was a quarter of the renderer's time). The same writes
        as vram_rw makes. */
     i = 0;
+#if !defined(PORT_PS3)
     if (dpsm == 0x00 || dpsm == 0x02 || dpsm == 0x0A || dpsm == 0x13 || dpsm == 0x14) {
         uint32_t bw = dbw ? dbw : 1, count = bytes * 8 / bits;
         uint8_t *vram8 = (uint8_t *)sVram; /* (little-endian hosts only, as everything here) */
@@ -847,6 +918,7 @@ static void transfer_data(const uint8_t *p, uint32_t bytes) {
             gs.tpos += run;
         }
     }
+#endif
     for (; i * bits < bytes * 8 && gs.tpos < total; gs.tpos++, i++) {
         uint32_t x = gs.tx + gs.tpos % gs.tw, y = gs.ty + gs.tpos / gs.tw, c;
 
@@ -894,7 +966,12 @@ static void reg_write(uint32_t addr, uint64_t d) {
     case 0x0D: vertex(d & 0xFFFF, (d >> 16) & 0xFFFF, (uint32_t)(d >> 32), 0); break;
     case 0x14: case 0x15: gs.tex1[addr - 0x14] = d; break;
     case 0x16: case 0x17: gs.tex0[addr - 0x16] = (gs.tex0[addr - 0x16] & ~0x1FFFFFE003F00000ull) | (d & 0x1FFFFFE003F00000ull); break; /* TEX2: PSM and CLUT fields */
-    case 0x18: case 0x19: gs.xyoffset[addr - 0x18] = d; break;
+    case 0x18: case 0x19:
+#if defined(PORT_PS3)
+        { static unsigned xy = 0; if (xy < 12) { xy++; fprintf(stderr, "bt3: XYOFFSET[%u] frame=%u = %016llx\n", addr - 0x18, sFrame, (unsigned long long)d); fflush(stderr); } }
+#endif
+        gs.xyoffset[addr - 0x18] = d;
+        break;
     case 0x1A: gs.prmodecont = d; prim_update(); break;
     case 0x1B: gs.prmode = d; prim_update(); break;
     case 0x3B: gs.texa = d; break;
@@ -902,12 +979,17 @@ static void reg_write(uint32_t addr, uint64_t d) {
     case 0x42: case 0x43: gs.alpha[addr - 0x42] = d; break;
     case 0x47: case 0x48: gs.test[addr - 0x47] = d; break;
     case 0x4A: case 0x4B: gs.fba[addr - 0x4A] = d & 1; break;
-    case 0x4C: case 0x4D: gs.frame[addr - 0x4C] = d; break;
+    case 0x4C: case 0x4D:
+#if defined(PORT_PS3)
+        { static int sdbg = 0; if (sdbg < 5) { sdbg++; fprintf(stderr, "bt3: reg_write FRAME=%llx\n", (unsigned long long)d); fflush(stderr); } }
+#endif
+        gs.frame[addr - 0x4C] = d; break;
     case 0x4E: case 0x4F: gs.zbuf[addr - 0x4E] = d; break;
     case 0x50: gs.bitbltbuf = d; break;
     case 0x51: gs.trxpos = d; break;
     case 0x52: gs.trxreg = d; break;
     case 0x53: gs.trxdir = d; transfer_begin(); break;
+    case 0x61: sFinish = 1; break; /* the port's end-of-display-list marker (GS_FINISH in Dma_Flush) */
     case 0x7F: if (sGpu) { GsGpu_Native((int)d); } break; /* not a GS register: the port's marker (gs_marker.c) */
     default: break;
     }
@@ -923,50 +1005,70 @@ int GsGpu_Enabled(void) {
 
 /* ------------------------------------------------------------------------------------------------ GIF */
 
-/* One run of GIF data (whole quadwords). */
-void Gs_Gif(const uint8_t *p, uint32_t qwc) {
-    static uint64_t tag_lo, tag_hi; /* current tag: persists across runs */
+#if defined(PORT_PS3)
+static inline uint64_t bswap64(uint64_t v) {
+    return ((v & 0x00000000000000FFull) << 56) | ((v & 0x000000000000FF00ull) << 40) |
+           ((v & 0x0000000000FF0000ull) << 24) | ((v & 0x00000000FF000000ull) << 8) |
+           ((v & 0x000000FF00000000ull) >> 8) | ((v & 0x0000FF0000000000ull) >> 24) |
+           ((v & 0x00FF000000000000ull) >> 40) | ((v & 0xFF00000000000000ull) >> 56);
+}
+static inline uint32_t bswap32(uint32_t v) {
+    return (v >> 24) | ((v >> 8) & 0x0000FF00u) | ((v << 8) & 0x00FF0000u) | (v << 24);
+}
+#else
+#define bswap64(v) (v)
+#define bswap32(v) (v)
+#endif
+
+#if defined(PORT_PS3)
+/* PS2 files (textures, the boot file) hold their VIF/GIF packets little-endian. `le` packets are
+   converted on the way in, one field at a time: the image data itself must stay as it is. */
+static inline uint64_t gs_u64(const uint64_t *q, int le) {
+    return le ? bswap64(*q) : *q;
+}
+#else
+#define gs_u64(q, le) (*(q))
+#endif
+
+/* One run of GIF data (whole quadwords). The tag state persists across runs: a DIRECT transfer may be cut in two
+   by the end of a DMA block. `le`: little-endian PS2 packet read straight from a file. */
+void Gs_Gif(const uint8_t *p, uint32_t qwc, int le) {
+    static int tablesReady;
+    static uint64_t tag_lo, tag_hi; /* current tag */
     static uint32_t loops, reg;     /* loops left, register index within the loop */
     const uint64_t *q = (const uint64_t *)p;
 
+    if (!tablesReady) { tables_init(); tablesReady = 1; }
     while (qwc != 0) {
         uint32_t flg, nreg;
 
         if (loops == 0) {
             sStat[3]++;
-            tag_lo = q[0];
-            tag_hi = q[1];
+            tag_lo = gs_u64(q, le);
+            tag_hi = gs_u64(q + 1, le);
             q += 2;
             qwc--;
-            loops = tag_lo & 0x7FFF;
+            loops = (uint32_t)(tag_lo & 0x7FFF);
             reg = 0;
             if (loops != 0 && ((tag_lo >> 46) & 1) && ((tag_lo >> 58) & 3) == 0) {
                 reg_write(0, (tag_lo >> 47) & 0x7FF);
             }
             continue;
         }
-        flg = (tag_lo >> 58) & 3;
-        nreg = (tag_lo >> 60) & 15;
+        flg = (uint32_t)((tag_lo >> 58) & 3);
+        nreg = (uint32_t)(tag_lo >> 60) & 15;
         if (nreg == 0) {
             nreg = 16;
         }
-        if (flg == 0) { /* PACKED: one quadword per register */
+        if (flg == 0) { /* PACKED: one doubleword per register */
+            uint64_t value = gs_u64(q, le);
+            uint64_t high = gs_u64(q + 1, le);
             uint32_t r = (tag_hi >> (4 * reg)) & 15;
-            uint64_t lo = q[0], hi = q[1];
 
-            switch (r) {
-            case 0x0: reg_write(0, lo & 0x7FF); break;
-            case 0x1: reg_write(1, (lo & 0xFF) | ((lo >> 32) & 0xFF) << 8 | (hi & 0xFF) << 16 | ((hi >> 32) & 0xFF) << 24 |
-                                   (uint64_t)*(uint32_t *)&gs.q << 32); break;
-            case 0x2: gs.st = lo; { uint32_t qq = (uint32_t)hi; memcpy(&gs.q, &qq, 4); } break;
-            case 0x3: reg_write(3, (lo & 0x3FFF) | ((lo >> 32) & 0x3FFF) << 16); break;
-            case 0x4: vertex(lo & 0xFFFF, (lo >> 32) & 0xFFFF, (uint32_t)((hi >> 4) & 0xFFFFFF), !((hi >> 47) & 1)); break;
-            case 0x5: vertex(lo & 0xFFFF, (lo >> 32) & 0xFFFF, (uint32_t)hi, !((hi >> 47) & 1)); break;
-            case 0xC: vertex(lo & 0xFFFF, (lo >> 32) & 0xFFFF, (uint32_t)((hi >> 4) & 0xFFFFFF), 0); break;
-            case 0xD: vertex(lo & 0xFFFF, (lo >> 32) & 0xFFFF, (uint32_t)hi, 0); break;
-            case 0xE: reg_write((uint32_t)(hi & 0xFF), lo); break;
-            case 0xF: break;
-            default: reg_write(r, lo); break;
+            if (r == 0xE) {
+                reg_write((uint32_t)(high & 0xFF), value);
+            } else {
+                reg_write(r, value);
             }
             q += 2;
             qwc--;
@@ -974,12 +1076,12 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc) {
                 reg = 0;
                 loops--;
             }
-        } else if (flg == 1) { /* REGLIST: 64 bits per register */
+        } else if (flg == 1) { /* REGLIST: two registers per doubleword */
             int half;
             for (half = 0; half < 2 && loops != 0; half++) {
                 uint32_t r = (tag_hi >> (4 * reg)) & 15;
                 if (r != 0xE && r != 0xF) {
-                    reg_write(r, q[half]);
+                    reg_write(r, gs_u64(q + half, le));
                 }
                 if (++reg == nreg) {
                     reg = 0;
@@ -988,13 +1090,10 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc) {
             }
             q += 2;
             qwc--;
-        } else { /* IMAGE */
+        } else { /* IMAGE: the rest of the tag's quadwords are picture data, raw */
             uint32_t n = loops < qwc ? loops : qwc;
-            extern uint64_t gDrawXferNs; /* (BT3_DRAW_LOG: the time writing pictures into GS memory) */
-            uint64_t t0 = now_ns();
             sStat[6] += n;
             transfer_data((const uint8_t *)q, n * 16);
-            gDrawXferNs += now_ns() - t0;
             q += 2 * n;
             qwc -= n;
             loops -= n;
@@ -1007,7 +1106,7 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc) {
 /* One run of VIF data (32-bit words): GIF data (DIRECT) goes to the GS, everything else to VU1 (gs_vu1.c).
    A command's data may continue in the next run (the command word often sits in the DMA tag, its data behind):
    DIRECT data is passed on as it comes, the data of the other commands is collected first. */
-static void vif(const uint32_t *w, uint32_t count) {
+static void vif(const uint32_t *w, uint32_t count, int le) {
     static uint32_t direct;                    /* quadwords of GIF data still to come */
     static uint32_t pend, need, have, buf[2048]; /* a command waiting for `need` words of data */
     uint32_t i = 0;
@@ -1021,7 +1120,7 @@ static void vif(const uint32_t *w, uint32_t count) {
                 break; /* misaligned run: drop it */
             }
             sStat[2] += qwc;
-            Gs_Gif((const uint8_t *)&w[i], qwc);
+            Gs_Gif((const uint8_t *)&w[i], qwc, le);
             i += qwc * 4;
             direct -= qwc;
             continue;
@@ -1060,7 +1159,8 @@ static void vif(const uint32_t *w, uint32_t count) {
             }
             continue;
         }
-        code = w[i++];
+        code = le ? bswap32(w[i]) : w[i];
+        i++;
         cmd = (code >> 24) & 0x7F;
         num = (code >> 16) & 0xFF;
         imm = code & 0xFFFF;
@@ -1193,16 +1293,16 @@ static void race_walk(uint32_t tadr, int which) {
     int guard;
 
     for (guard = 0; guard < 8192; guard++) {
-        const uint32_t *tag = (const uint32_t *)Port_Ptr(tadr), *data;
+        const uint32_t *tag = (const uint32_t *)gs_dma_ptr(tadr), *data;
         uint32_t qwc = tag[0] & 0xFFFF, id = (tag[0] >> 28) & 7, addr = tag[1], i;
         uint64_t h = 1469598103934665603ull;
         int end = 0;
 
         switch (id) {
-        case 0: data = (const uint32_t *)Port_Ptr(addr); end = 1; break;
+        case 0: data = (const uint32_t *)gs_dma_ptr(addr); end = 1; break;
         case 1: data = tag + 4; tadr += 16 + qwc * 16; break;
         case 2: data = tag + 4; tadr = addr; break;
-        case 3: case 4: data = (const uint32_t *)Port_Ptr(addr); tadr += 16; break;
+        case 3: case 4: data = (const uint32_t *)gs_dma_ptr(addr); tadr += 16; break;
         case 5: data = tag + 4; if (sp < 2) { stack[sp++] = tadr + 16 + qwc * 16; } tadr = addr; break;
         case 6: data = tag + 4; if (sp > 0) { tadr = stack[--sp]; } else { end = 1; } break;
         default: data = tag + 4; end = 1; break;
@@ -1373,6 +1473,10 @@ static uint64_t now_ns(void) {
    same call site always passes the same pointer and the search is a few pointer comparisons. */
 #undef getenv
 const char *Port_GetEnv(const char *name) {
+#if defined(PORT_PS3)
+    (void)name;
+    return NULL;
+#else
     static struct { const char *name, *value; } known[256];
     static volatile int count;
     static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1393,6 +1497,7 @@ const char *Port_GetEnv(const char *name) {
     }
     pthread_mutex_unlock(&lock);
     return value;
+#endif
 }
 /* Each place a variable is asked for remembers its answer (the names are literals; the environment does not
    change while the game runs). Asked in the middle of drawing, the search in Port_GetEnv was 3% of a frame. */
@@ -1426,38 +1531,7 @@ static int render_thread_wanted(void) {
 }
 
 static int gs_on(void) {
-    static int on = -1;
-
-    if (on < 0) {
-        on = gs_mode() != NULL;
-        tables_init();
-        gs.prmodecont = 1; /* the GS starts with the attributes in PRIM */
-        sDrawFrom = getenv("BT3_GS_FROM") != NULL ? atoi(getenv("BT3_GS_FROM")) : 0;
-        sDumpFrame = getenv("BT3_GS_DUMP") != NULL ? atoi(getenv("BT3_GS_DUMP")) : -1;
-        if (getenv("BT3_GS_PROBE") != NULL) {
-            sscanf(getenv("BT3_GS_PROBE"), "%d,%d", &sProbeX, &sProbeY);
-        }
-        if (on && strcmp(gs_mode(), "gpu") == 0) {
-            /* The render thread (setting "render_thread", F1 > Video; BT3_GS_THREAD=0/1 over it): the back end, the
-               window and the list run on a thread of their own while the game computes the next tick. Not with
-               OpenGL (its context is one thread's, and the game's thread asks the back end for a few things), not
-               on macOS (a window there is the main thread's), not with two logical processors or fewer. */
-            sThreaded = render_thread_wanted();
-            if (sThreaded) {
-                pthread_create(&sThread, NULL, render_thread, NULL);
-                render_post(1, 0, 0);
-                render_wait();
-                sGpu = sInitResult;
-                atexit(render_stop);
-                if (sGpu && GsGpu_BackendIsGl()) {
-                    fprintf(stderr, "bt3: render thread: the Vulkan renderer did not start; OpenGL on the thread (the game's own reads of the picture are left out)\n");
-                }
-            } else {
-                sGpu = GsGpu_Init();
-            }
-        }
-    }
-    return on;
+    return 1;
 }
 
 /* A transfer on the GIF channel itself (the game uses it for texture uploads outside the frame's list):
@@ -1472,18 +1546,18 @@ void Port_GsGifChannel(uint32_t addr, uint32_t qwc, int chain) {
         render_wait(); /* the GS is one device: this transfer goes after the list that is being drawn */
     }
     if (!chain) {
-        Gs_Gif((const uint8_t *)Port_Ptr(addr), qwc);
+        Gs_Gif((const uint8_t *)gs_dma_ptr(addr), qwc, 0);
         return;
     }
     for (guard = 0; guard < 100000; guard++) {
-        const uint32_t *tag = (const uint32_t *)Port_Ptr(addr);
+        const uint32_t *tag = (const uint32_t *)gs_dma_ptr(addr);
         uint32_t n = tag[0] & 0xFFFF, id = (tag[0] >> 28) & 7, ref = tag[1];
 
         if (id == 0 || id == 3 || id == 4) {
-            Gs_Gif((const uint8_t *)Port_Ptr(ref), n);
+            Gs_Gif((const uint8_t *)gs_dma_ptr(ref), n, 0);
             addr += 16;
         } else {
-            Gs_Gif((const uint8_t *)(tag + 4), n);
+            Gs_Gif((const uint8_t *)(tag + 4), n, 0);
             addr = id == 2 ? ref : addr + 16 + n * 16;
         }
         if (id == 0 || id == 7) {
@@ -1503,6 +1577,9 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
     }
     if (!sGpu) {
         run_chain(tadr, tte);
+#if defined(PORT_PS3)
+        if (sFrame <= 1) { fprintf(stderr, "bt3: VIF1 run_chain returned\n"); fflush(stderr); }
+#endif
         return;
     }
     tChain = now_ns();
@@ -1589,13 +1666,29 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
     }
 }
 
-/* One block of a frame's list into VIF1: its tag's last two words (with TTE) and its data. */
+/* One block of a frame's list into VIF1: its tag's last two words (with TTE) and its data.
+   A REF block marked by Dma_AddRefLe() holds a little-endian PS2 packet (a texture upload straight from a
+   file), so the VIF codes and the GIF fields are converted on the way in. */
+#define GS_REF_LE_MARKER 0x4C454946u /* 'LEIF', matches DMA_REF_LE_MARKER in include/sys/dma.h */
 static void chain_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte) {
+    /* Runtime-built packets are host-endian (big-endian on PS3): their u64 fields are stored
+       numerically and must not be swapped. Only REF blocks marked Dma_AddRefLe() come straight
+       from a little-endian PS2 file. */
+    int le = tag[2] == GS_REF_LE_MARKER;
     sStat[0]++;
-    if (tte) {
-        vif(tag + 2, 2);
+#if defined(PORT_PS3)
+    if (sFrame == 0 && sStat[0] <= 8) { fprintf(stderr, "bt3: VIF block[%u] begin qwc=%u tte=%d le=%d\n", sStat[0], qwc, tte, le); fflush(stderr); }
+#endif
+    if (tte && !le) {
+        vif(tag + 2, 2, 0);
     }
-    vif(data, qwc * 4);
+#if defined(PORT_PS3)
+    if (sFrame == 0 && sStat[0] <= 8) { fprintf(stderr, "bt3: VIF block[%u] data\n", sStat[0]); fflush(stderr); }
+#endif
+    vif(data, qwc * 4, le);
+#if defined(PORT_PS3)
+    if (sFrame == 0 && sStat[0] <= 8) { fprintf(stderr, "bt3: VIF block[%u] done\n", sStat[0]); fflush(stderr); }
+#endif
 }
 
 static void chain_end(void);
@@ -1647,16 +1740,16 @@ static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag
     int guard;
 
     for (guard = 0; guard < 100000; guard++) {
-        const uint32_t *tag = (const uint32_t *)Port_Ptr(tadr);
+        const uint32_t *tag = (const uint32_t *)gs_dma_ptr(tadr);
         uint32_t qwc = tag[0] & 0xFFFF, id = (tag[0] >> 28) & 7, addr = tag[1]; /* a game address: all 32 bits */
         const uint32_t *data;
         int end = 0;
 
         switch (id) {
-        case 0: data = (const uint32_t *)Port_Ptr(addr); end = 1; break;                 /* REFE */
+        case 0: data = (const uint32_t *)gs_dma_ptr(addr); end = 1; break;                 /* REFE */
         case 1: data = tag + 4; tadr += 16 + qwc * 16; break;                             /* CNT */
         case 2: data = tag + 4; tadr = addr; break;                                       /* NEXT */
-        case 3: case 4: data = (const uint32_t *)Port_Ptr(addr); tadr += 16; break;      /* REF, REFS */
+        case 3: case 4: data = (const uint32_t *)gs_dma_ptr(addr); tadr += 16; break;      /* REF, REFS */
         case 5: data = tag + 4; if (sp < 2) { stack[sp++] = tadr + 16 + qwc * 16; } tadr = addr; break; /* CALL */
         case 6: data = tag + 4; if (sp > 0) { tadr = stack[--sp]; } else { end = 1; } break;          /* RET */
         default: data = tag + 4; end = 1; break;                                          /* END */
@@ -1664,28 +1757,84 @@ static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag
         if (sDumpFrame == (int)sFrame) {
             fprintf(stderr, "  dma tag at %08x: id %u qwc %u addr %08x | %08x %08x (depth %u)\n", (unsigned)Port_Addr(tag), id, qwc, addr, tag[2], tag[3], sp);
         }
+#if defined(PORT_PS3)
+        if (sFrame == 0 && guard < 8) {
+            fprintf(stderr, "bt3: chain tag[%d] id=%u qwc=%u addr=%08x tte=%d\n", guard, id, qwc, addr, tte); fflush(stderr);
+        }
+#endif
         block(tag, data, qwc, tte);
+#if defined(PORT_PS3)
+        if (sFrame == 0 && guard < 8) { fprintf(stderr, "bt3: chain block[%d] returned\n", guard); fflush(stderr); }
+#endif
         if (end) {
+#if defined(PORT_PS3)
+            if (sFrame == 0) { fprintf(stderr, "bt3: walk_chain terminating at tag[%d]\n", guard); fflush(stderr); }
+#endif
             break;
         }
     }
+#if defined(PORT_PS3)
+    if (guard == 100000) { fprintf(stderr, "bt3: chain guard exhausted\n"); fflush(stderr); }
+    if (sFrame == 0) { fprintf(stderr, "bt3: walk_chain exit\n"); fflush(stderr); }
+#endif
 }
 
 /* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
 static void run_chain(uint32_t tadr, int tte) {
     extern void GsGpu_ListStart(void);
+#if defined(PORT_PS3)
+    uint64_t t0 = now_ns();
+#endif
 
     GsGpu_ListStart();
     walk_chain(tadr, tte, chain_block);
+#if defined(PORT_PS3)
+    {
+        uint64_t t1 = now_ns();
+        if (sFrame == 0) { fprintf(stderr, "bt3: run_chain before chain_end\n"); fflush(stderr); }
+        chain_end();
+        if (sFrame >= 44 && sFrame <= 70) {
+            fprintf(stderr, "bt3: CHAINTIME frame=%u walk=%.1fms end=%.1fms\n", sFrame, (double)(t1 - t0) / 1e6,
+                    (double)(now_ns() - t1) / 1e6);
+            fflush(stderr);
+        }
+    }
+#else
     chain_end();
+#endif
+#if defined(PORT_PS3)
+    if (sFrame <= 1) { fprintf(stderr, "bt3: run_chain after chain_end\n"); fflush(stderr); }
+#endif
 }
 
 static void chain_end(void) {
-    if (getenv("BT3_GS_VERBOSE") != NULL && (sFrame < 4 || sFrame % 60 == 0)) {
-        fprintf(stderr, "gs: frame %u: %u DMA tags, %u VIF codes, %u DIRECT qwords, %u GIF tags, %u register writes, %u vertices, "
-                        "%u image qwords, %d targets\n", sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5],
-                sStat[6], sTargetCount);
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    {
+        static uint64_t last;
+        uint64_t t = now_ns();
+        if (sFrame >= 40 && sFrame <= 70) {
+            fprintf(stderr, "bt3: FRAMETIME frame=%u dt=%.1fms\n", sFrame, last != 0 ? (double)(t - last) / 1e6 : 0.0);
+            fflush(stderr);
+        }
+        last = t;
     }
+    if (sFrame == 0) { Port_StageTrace("chain_end: enter"); Port_StageTrace("chain_end: before verbose getenv"); }
+#endif
+    {
+        const char *verbose = getenv("BT3_GS_VERBOSE");
+#if defined(PORT_PS3)
+        if (sFrame == 0) { Port_StageTrace("chain_end: after verbose getenv"); }
+#endif
+        if (verbose != NULL && (sFrame < 4 || sFrame % 60 == 0)) {
+            fprintf(stderr, "gs: frame %u: %u DMA tags, %u VIF codes, %u DIRECT qwords, %u GIF tags, %u register writes, %u vertices, "
+                            "%u image qwords, %d targets\n", sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5],
+                    sStat[6], sTargetCount);
+        }
+    }
+#if defined(PORT_PS3)
+    if (sFrame == 0) { Port_StageTrace("chain_end: before dump check"); }
+#endif
     if (sDumpFrame == (int)sFrame) {
         static const int pt[5][2] = {{360, 330}, {362, 331}, {100, 100}, {400, 250}, {364, 300}};
         int k;
@@ -1697,17 +1846,90 @@ static void chain_end(void) {
     if (sDumpFrame == (int)sFrame) {
         fprintf(stderr, "  pixels: %u outside scissor, %u failed alpha test, %u failed depth test, %u written\n", sPix[0], sPix[1], sPix[2], sPix[3]);
     }
+#if defined(PORT_PS3)
+    if (sFrame < 4) {
+        fprintf(stderr, "bt3: GSFRAME %u tags=%u vif=%u direct=%u gif=%u regs=%u verts=%u img=%u pix(out=%u alpha=%u depth=%u written=%u)\n",
+                sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5], sStat[6],
+                sPix[0], sPix[1], sPix[2], sPix[3]);
+        fflush(stderr);
+    }
+#endif
+#if defined(PORT_PS3)
+    if (sFrame == 0) { Port_StageTrace("chain_end: after dump check"); Port_StageTrace("chain_end: before clear"); }
+#endif
+#if defined(PORT_PS3)
+    {
+        static uint8_t rgb[512 * 448 * 3];
+        extern void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb);
+        extern void Port_Ps3VideoPresent(const uint8_t *rgb, uint32_t width, uint32_t height);
+        uint64_t fr = gs.frame[0];
+        uint32_t fbp = (uint32_t)(fr & 0x1FF);
+        uint32_t fbw = (uint32_t)((fr >> 16) & 0x3F);
+        uint32_t fpsm = (uint32_t)((fr >> 24) & 0x3F);
+        int finished = sFinish;
+
+        int sample;
+        sFinish = 0;
+        if (finished) {
+            sLists++;
+        }
+#if defined(PORT_PS3)
+        if (!finished) {
+            static unsigned nolist;
+            if (nolist < 12) {
+                fprintf(stderr, "bt3: NOLIST %u frame=%u tags=%u vif=%u direct=%u gif=%u regs=%u verts=%u img=%u "
+                                "pix(written=%u out=%u) xyoff=%016llx frame=%016llx\n",
+                        nolist, sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5], sStat[6],
+                        sPix[3], sPix[0], (unsigned long long)gs.xyoffset[0], (unsigned long long)fr);
+                fflush(stderr);
+                nolist++;
+            }
+        }
+#endif
+        sample = finished && (sLists <= 40 || (sFrame >= 40 && sFrame <= 70) || sLists % 150 == 0);
+        if (sample) {
+            fprintf(stderr, "bt3: LIST %u frame=%u tags=%u vif=%u direct=%u gif=%u regs=%u verts=%u img=%u "
+                            "pix(written=%u out=%u afail=%u dfail=%u) tri(tested=%u passed=%u) xyoff=%016llx frame=%016llx\n",
+                    sLists, sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5], sStat[6],
+                    sPix[3], sPix[0], sPix[1], sPix[2], sTriTested, sTriPassed, (unsigned long long)gs.xyoffset[0], (unsigned long long)fr);
+            fflush(stderr);
+        }
+        if (finished && fbw == 8 && fpsm == 0) {
+            Gs_StoreImage(fbp * 32, 512, 448, rgb);
+            if (sample) {
+                unsigned long long sum = 0; int k;
+                for (k = 0; k < 512 * 448 * 3; k++) sum += rgb[k];
+                fprintf(stderr, "bt3: LIST %u present sum=%llu first=%u,%u,%u\n", sLists, sum, rgb[0], rgb[1], rgb[2]);
+                fflush(stderr);
+            }
+            Port_Ps3VideoPresent(rgb, 512, 448);
+        }
+    }
+#endif
     memset(sPix, 0, sizeof(sPix));
     memset(sStat, 0, sizeof(sStat));
+    sTriTested = sTriPassed = 0;
+#if defined(PORT_PS3)
+    if (sFrame == 0) { Port_StageTrace("chain_end: after clear"); Port_StageTrace("chain_end: before VU frame end"); }
+#endif
     GsVu1_FrameEnd();
+#if defined(PORT_PS3)
+    if (sFrame == 0) { fprintf(stderr, "bt3: chain_end after VU frame end\n"); fflush(stderr); }
+#endif
     if (sGpu) {
         GsGpu_FrameEnd();
     }
     screenshot();
+#if defined(PORT_PS3)
+    if (sFrame == 0) { fprintf(stderr, "bt3: chain_end after screenshot\n"); fflush(stderr); }
+#endif
     if (sMissingTex != 0 && getenv("BT3_GS_VERBOSE") != NULL) {
         fprintf(stderr, "gs: frame %u: %u texel reads from textures that were never uploaded\n", sFrame, sMissingTex);
     }
     sMissingTex = 0;
+#if defined(PORT_PS3)
+    if (sFrame == 0) { fprintf(stderr, "bt3: chain_end returned\n"); fflush(stderr); }
+#endif
 }
 
 /* The game reads a piece of a frame buffer back (sceGsExecStoreImage; the cross-fade of the fight's scenes takes the
@@ -1765,7 +1987,13 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
         for (y = 0; y < h && y0 + y < 448; y++) {
             for (x = 0; x < w; x++) {
                 uint32_t c = vram_rw(fbp << 5, 8, 0, x, y0 + y, 0, 0);
+#if defined(PORT_PS3)
+                rgb[(y * w + x) * 3 + 0] = (uint8_t)c;
+                rgb[(y * w + x) * 3 + 1] = (uint8_t)(c >> 8);
+                rgb[(y * w + x) * 3 + 2] = (uint8_t)(c >> 16);
+#else
                 memcpy(rgb + (y * w + x) * 3, &c, 3);
+#endif
             }
         }
     }

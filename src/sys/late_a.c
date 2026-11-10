@@ -88,6 +88,9 @@ s32 Shen_Main(void) {
 
     if (gMenuArc12 == NULL) {
         gMenuArc12 = File_LoadSync(gProgress->unk4 + 0x18, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc12);
+        #endif
     }
     do {
         switch (gProgress->mode) {

@@ -1,5 +1,8 @@
 #include "common.h"
 #include "sys/gfx.h"
+#if defined(PORT_PS3)
+extern void Gs_Ps3InitState(void);
+#endif
 #include "sys/debug.h"
 #include "sys/file.h"
 #include "sys/save.h"
@@ -80,13 +83,20 @@ extern void PadWatch_Update(void);
 extern void PadWatch_Draw(void);
 extern void Vu0_CheckState(void);
 
-/* GS privileged (display) registers. */
-#define GS_PMODE ((volatile u64 *)0x12000000)
-#define GS_DISPFB1 ((volatile u64 *)0x12000070)
-#define GS_DISPLAY1 ((volatile u64 *)0x12000080)
-#define GS_DISPFB2 ((volatile u64 *)0x12000090)
-#define GS_DISPLAY2 ((volatile u64 *)0x120000A0)
-#define GS_EXTWRITE ((volatile u64 *)0x120000D0)
+/* GS privileged (display) registers. On PS3 their game addresses are BSS-backed (port_addr.h) and
+   must be translated; the PC build maps them as ordinary low memory in plat_mem.c. */
+#if defined(PORT_PS3)
+extern volatile u32 *Port_DmaReg(u32 addr);
+#define GS_REG64(a) ((volatile u64 *)Port_DmaReg(a))
+#else
+#define GS_REG64(a) ((volatile u64 *)(a))
+#endif
+#define GS_PMODE GS_REG64(0x12000000)
+#define GS_DISPFB1 GS_REG64(0x12000070)
+#define GS_DISPLAY1 GS_REG64(0x12000080)
+#define GS_DISPFB2 GS_REG64(0x12000090)
+#define GS_DISPLAY2 GS_REG64(0x120000A0)
+#define GS_EXTWRITE GS_REG64(0x120000D0)
 
 /* Switches the GS to interlaced NTSC field mode and builds the 512x448 double buffer in gGfx. */
 void Gfx_InitDrawEnv(void) {
@@ -139,7 +149,24 @@ void Gfx_SetDisplayRegs(s32 field, s32 blend) {
 }
 
 /* Resets the GS and the VIF/GIF paths, clears both frame buffers and sets up gGfx. Called once at boot. */
+#if defined(PORT_PS3)
+extern void Port_StageTrace(const char *what);
+#define GTRACE(what) Port_StageTrace("Gfx_Init: " what)
+#else
+#define GTRACE(what) ((void)0)
+#endif
+
 void Gfx_Init(void) {
+#if defined(PORT_PS3)
+    /* The PS3 port initializes RSX scanout in main_ps3.c and feeds GIF packets
+       to its own GS implementation. The libgraph/PS2 draw-environment calls
+       below target GS registers and crash under the PPU runtime. Set up the
+       software rasteriser's GS state directly so frames have a valid target. */
+    memset(&gGfx, 0, sizeof(gGfx));
+    Gs_Ps3InitState();
+    GTRACE("PS3 renderer initialized");
+    return;
+#else
     sceGsDBuff db;
     u64 pkt[12] = {
         GIF_TAG(5, 1, 1), GIF_REG_AD,
@@ -151,19 +178,33 @@ void Gfx_Init(void) {
     };
 
     memset(&gGfx, 0, sizeof(gGfx));
+    GTRACE("reset path");
     sceGsResetPath();
+    GTRACE("reset graph");
     sceGsResetGraph(0, 1, 2, 1);
+    GTRACE("send gif");
     Dma_SendGif((u32)pkt, 6);
+    GTRACE("reset graph 2");
     sceGsResetGraph(0, 1, 2, 1);
+    GTRACE("set dbuff");
     sceGsSetDefDBuff(&db, 0, 640, GFX_HEIGHT, 2, GS_PSMZ24, 1);
     FlushCache(0);
+    GTRACE("sync v");
     sceGsSyncV(0);
+    GTRACE("put draw env 0");
     sceGsPutDrawEnv(db.giftag0);
+    GTRACE("sync path 0");
     sceGsSyncPath(0, 0);
+    GTRACE("put draw env 1");
     sceGsPutDrawEnv(db.giftag1);
+    GTRACE("sync path 1");
     sceGsSyncPath(0, 0);
+    GTRACE("sync field");
     Gfx_SyncField();
+    GTRACE("init draw env");
     Gfx_InitDrawEnv();
+    GTRACE("done");
+#endif
 }
 
 /* Start of a frame: debug hook, rebuilds the battle object table, advances the screen fades. */
@@ -178,6 +219,26 @@ void Gfx_BeginFrame(void) {
  * previous display list and for `vsyncs` vertical blanks, then swaps the buffers and reprograms the display.
  */
 void Gfx_EndFrame(s32 vsyncs) {
+#if defined(PORT_PS3)
+    Fade_DrawScreen();
+#ifdef PORT
+    {
+        extern void PortTbo_SpecDraw(s32 vsyncs);
+        extern void PortQuit_Draw(int vsyncs);
+        PortTbo_SpecDraw(vsyncs);
+        PortQuit_Draw(vsyncs);
+    }
+#endif
+    FontIcon_Tick(vsyncs);
+    PadWatch_Update();
+    PadWatch_Draw();
+    Dbg_ProfColor(gBattleProf, 0x80404040);
+    Dbg_EndFrame();
+    Vu0_CheckState();
+    Vsync_Wait(vsyncs);
+    gGfx.frame++;
+    gGfx.field = gGfx.field == 0;
+#else
     Fade_DrawScreen();
 #ifdef PORT
     /* A spectator's line over the match it watches and its own pause menu (menu/port_tbo.c), over every screen. */
@@ -200,6 +261,7 @@ void Gfx_EndFrame(s32 vsyncs) {
     sceGsSwapDBuff(&gGfx.db, gGfx.frame);
     Gfx_SetDisplayRegs(gGfx.field, 1);
     sceGsSyncPath(0, 0);
+#endif
 }
 
 /* Always 1. */

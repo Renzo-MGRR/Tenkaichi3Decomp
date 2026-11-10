@@ -1,5 +1,8 @@
 #include "common.h"
 #include "sys/heap.h"
+#if defined(PORT_PS3)
+#include "../../port/src/port_addr.h"
+#endif
 
 extern void *malloc(u32 size);
 s32 Mem_Align4Pad(u32 value);
@@ -19,7 +22,28 @@ extern s32 gHeapUnk78[HEAP_COUNT];
 void Heap_ReportBadFree(void);
 
 u32 Heap_BlockData(HeapBlock *block) {
+#if defined(PORT_PS3)
+    return Port_Addr((u8 *)block + sizeof(HeapBlock));
+#else
     return (u32)block + sizeof(HeapBlock);
+#endif
+}
+
+/* Game pointer fields are 32-bit PS2 addresses. PS3 backing lives in PPU BSS. */
+static HeapBlock *Heap_DecodeBlock(HeapBlock *block) {
+#if defined(PORT_PS3)
+    return block != NULL ? (HeapBlock *)Port_Ptr((u32)block) : NULL;
+#else
+    return block;
+#endif
+}
+
+static HeapBlock *Heap_EncodeBlock(HeapBlock *block) {
+#if defined(PORT_PS3)
+    return block != NULL ? (HeapBlock *)Port_Addr(block) : NULL;
+#else
+    return block;
+#endif
 }
 
 void Heap_InitFreeBlock(HeapBlock *block, s32 size) {
@@ -50,7 +74,7 @@ HeapBlock *Heap_PrevBlock(HeapBlock *block) {
     HeapBlock *prev = NULL;
 
     if (block != NULL) {
-        if (block != gHeapStart[0] && block != gHeapStart[1]) {
+        if (block != Heap_DecodeBlock(gHeapStart[0]) && block != Heap_DecodeBlock(gHeapStart[1])) {
             prev = (HeapBlock *)((u8 *)block - *(s32 *)((u8 *)block - 4));
         }
     }
@@ -62,7 +86,7 @@ HeapBlock *Heap_NextBlock(HeapBlock *block) {
 
     if (block != NULL) {
         block = (HeapBlock *)((u8 *)block + block->size);
-        if (block != gHeapEnd[0] && block != gHeapEnd[1]) {
+        if (block != Heap_DecodeBlock(gHeapEnd[0]) && block != Heap_DecodeBlock(gHeapEnd[1])) {
             next = block;
         }
     }
@@ -76,8 +100,8 @@ void Heap_Create(void) {
     size += Mem_Align4Pad(size);
     start = malloc(size);
     gHeapSize[0] = size;
-    gHeapEnd[0] = (HeapBlock *)((u8 *)start + size);
-    gHeapStart[0] = start;
+    gHeapEnd[0] = Heap_EncodeBlock((HeapBlock *)((u8 *)start + size));
+    gHeapStart[0] = Heap_EncodeBlock(start);
     Heap_InitFreeBlock(start, size);
 }
 
@@ -87,7 +111,7 @@ HeapBlock *Heap_FindBlock(u32 data) {
     s32 i;
 
     for (i = 0; i < HEAP_COUNT; i++) {
-        for (block = gHeapStart[i]; block != NULL; block = Heap_NextBlock(block)) {
+        for (block = Heap_DecodeBlock(gHeapStart[i]); block != NULL; block = Heap_NextBlock(block)) {
             if (block->used == 1 && block->data == data) {
                 found = block;
                 break;
@@ -120,7 +144,7 @@ HeapBlock *Heap_FindFreeFromHead(s32 heap, s32 size) {
     HeapBlock *found = NULL;
     HeapBlock *block;
 
-    for (block = gHeapStart[heap]; block != NULL; block = Heap_NextBlock(block)) {
+    for (block = Heap_DecodeBlock(gHeapStart[heap]); block != NULL; block = Heap_NextBlock(block)) {
         if (block->used == 0 && block->size >= size) {
             found = block;
             break;
@@ -152,7 +176,7 @@ HeapBlock *Heap_FindFreeFromTail(s32 heap, s32 size) {
     HeapBlock *found = NULL;
     HeapBlock *block;
 
-    for (block = Heap_PrevBlock(gHeapEnd[heap]); block != NULL; block = Heap_PrevBlock(block)) {
+    for (block = Heap_PrevBlock(Heap_DecodeBlock(gHeapEnd[heap])); block != NULL; block = Heap_PrevBlock(block)) {
         if (block->used == 0 && block->size >= size) {
             found = block;
             break;
@@ -244,7 +268,11 @@ void *Heap_Alloc(s32 size, u32 align, s32 fromTail, s32 heap) {
     void *data = NULL;
 
     if (block != NULL) {
+#if defined(PORT_PS3)
+        data = Port_Ptr(block->data);
+#else
         data = (void *)block->data;
+#endif
     }
     return data;
 }
@@ -261,7 +289,11 @@ void Heap_Free(void *ptr) {
         }
     }
 #endif
+#if defined(PORT_PS3)
+    block = Heap_FindBlock(Port_Addr(ptr));
+#else
     block = Heap_FindBlock((u32)ptr);
+#endif
 
     if (block == NULL) {
         Heap_ReportBadFree();
@@ -292,7 +324,7 @@ s32 Heap_GetFreeSize(void) {
     s32 i;
 
     for (i = 0; i < HEAP_COUNT; i++) {
-        for (block = gHeapStart[i]; block != NULL; block = Heap_NextBlock(block)) {
+        for (block = Heap_DecodeBlock(gHeapStart[i]); block != NULL; block = Heap_NextBlock(block)) {
             if (block->used == 0) {
                 total += block->dataSize;
             }
@@ -308,7 +340,7 @@ s32 Heap_GetUsedSize(void) {
     s32 i;
 
     for (i = 0; i < HEAP_COUNT; i++) {
-        for (block = gHeapStart[i]; block != NULL; block = Heap_NextBlock(block)) {
+        for (block = Heap_DecodeBlock(gHeapStart[i]); block != NULL; block = Heap_NextBlock(block)) {
             if (block->used == 1) {
                 total += block->dataSize;
             }
@@ -324,7 +356,7 @@ u32 Heap_GetLargestFree(void) {
     s32 i;
 
     for (i = 0; i < HEAP_COUNT; i++) {
-        for (block = gHeapStart[i]; block != NULL; block = Heap_NextBlock(block)) {
+        for (block = Heap_DecodeBlock(gHeapStart[i]); block != NULL; block = Heap_NextBlock(block)) {
             if (block->used == 0) {
                 if (largest < (u32)block->dataSize) {
                     largest = block->dataSize;
@@ -344,11 +376,11 @@ void Heap_ReportBadFree(void) {
 }
 
 HeapBlock *Heap_GetStart(s32 heap) {
-    return gHeapStart[heap];
+    return Heap_DecodeBlock(gHeapStart[heap]);
 }
 
 HeapBlock *Heap_GetEnd(s32 heap) {
-    return gHeapEnd[heap];
+    return Heap_DecodeBlock(gHeapEnd[heap]);
 }
 
 s32 Heap_GetSize(s32 heap) {

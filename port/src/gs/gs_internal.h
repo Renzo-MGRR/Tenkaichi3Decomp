@@ -41,7 +41,7 @@ void GsGpu_FbUpload(int second);
 int Gs_PsmBits(uint32_t psm);
 uint32_t Gs_Expand(uint32_t c, uint32_t psm); /* stored colour -> R | G << 8 | B << 16 | A << 24 */
 
-void Gs_Gif(const uint8_t *p, uint32_t qwc); /* GIF data for the GS (from VIF1 DIRECT or a VU1 kick) */
+void Gs_Gif(const uint8_t *p, uint32_t qwc, int le); /* GIF data for the GS (from VIF1 DIRECT or a VU1 kick) */
 
 /* VU1 (gs_vu1.c): what VIF1 does to it, and running its programs. */
 void GsVu1_SetCycle(uint32_t cl, uint32_t wl);

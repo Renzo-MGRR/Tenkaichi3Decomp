@@ -18,10 +18,17 @@ void *Bpe_Decode(void *src, void *dst, s32 *rawSize) {
     s32 hi;
     void *buf;
 
+#if defined(PORT_PS3)
+    in = src;
+    size = (s32)((u32)in[0] | (u32)in[1] << 8 | (u32)in[2] << 16 | (u32)in[3] << 24);
+    packSize = (s32)((u32)in[4] | (u32)in[5] << 8 | (u32)in[6] << 16 | (u32)in[7] << 24);
+    src = (u8 *)src + 8;
+#else
     size = *(s32 *)src;
     src = (s32 *)src + 1;
     packSize = *(s32 *)src;
     src = (s32 *)src + 1;
+#endif
     if (rawSize != NULL) {
         *rawSize = size;
     }

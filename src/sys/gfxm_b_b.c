@@ -8,6 +8,13 @@
 #include "sys/dma.h"
 #include "sys/gfxm_b.h"
 #include "sys/gfxm_b_b.h"
+#if defined(PORT_PS3)
+#include "../../port/src/port_addr.h"
+#endif
+
+#if defined(PORT_PS3)
+_Static_assert(sizeof(TexEntry) == 0x40, "PS3 texture entries must retain the game file stride");
+#endif
 
 extern void *memset(void *dst, s32 c, u32 n);
 
@@ -241,38 +248,101 @@ s32 Tex_Log2Size(s32 size) {
 }
 
 /* Turns the word offsets of a texture file into pointers: the entry table and each entry's pixel and CLUT data. */
+#if defined(PORT_PS3)
+static u32 Tex_ReadLe32(const u8 *p) {
+    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+}
+static void Tex_StoreBe32(u8 *p, u32 v) {
+    p[0] = (u8)(v >> 24); p[1] = (u8)(v >> 16); p[2] = (u8)(v >> 8); p[3] = (u8)v;
+}
+static u64 Tex_ReadLe64(const u8 *p) {
+    return (u64)Tex_ReadLe32(p) | (u64)Tex_ReadLe32(p + 4) << 32;
+}
+#endif
+
 void Res_RelocateOffsets(TexFile **out, u8 *base, TexFile *hdr) {
     u32 i;
     TexEntry *e;
 
+#if defined(PORT_PS3)
+    /* A texture header and its entries are PS2 little-endian. Swap only numeric fields, leaving pixels alone. */
+    {
+        u8 *h = (u8 *)hdr;
+        u32 count = Tex_ReadLe32(h), entOfs = Tex_ReadLe32(h + 4);
+        Tex_StoreBe32(h, count); Tex_StoreBe32(h + 4, entOfs);
+        for (i = 0; i < count; i++) {
+            u8 *q = base + entOfs * 4 + i * sizeof(TexEntry);
+            u32 k;
+            for (k = 0; k < 10; k++) Tex_StoreBe32(q + k * 4, Tex_ReadLe32(q + k * 4));
+            {
+                u64 v = Tex_ReadLe64(q + 0x30);
+                memcpy(q + 0x30, &v, 8);
+            }
+        }
+    }
+#endif
     *out = hdr;
     hdr->ent = (TexEntry *)(base + hdr->entOfs * 4);
     for (i = 0; i < (*out)->count; i++) {
         e = &(*out)->ent[i];
         if (e->pixOfs != 0) {
+#if defined(PORT_PS3)
+            e->pix = Port_Addr(base + e->pixOfs * 4);
+#else
             e->pix = base + e->pixOfs * 4;
+#endif
         }
         if (e->clutOfs != 0) {
+#if defined(PORT_PS3)
+            e->clut = Port_Addr(base + e->clutOfs * 4);
+#else
             e->clut = base + e->clutOfs * 4;
+#endif
         }
     }
 }
 
+#if defined(PORT_PS3)
+/* Queues the upload packet that copies data to GS block `tbp` (with the block's format in the high BITBLTBUF bits).
+   Same layout as the port's other packet builders (sys/gfxm_c.c FlashDraw_UploadTex, sys/dma.c): 32-bit words in
+   PS2 little-endian order, which Dma_AddData converts to the CELL's native 64-bit fields. A native-u64 struct would
+   be word-swapped and the GIF tag would decode with NLOOP 0, so no upload ever happened. */
+static void Tex_QueueBlt(s32 tbp, u32 blt) {
+    u32 pkt[12] = { DMA_TAG_CNT | 2, 0, VIF_FLUSHE, VIF_DIRECT | 2,
+                    GIF_EOP | 1, 0x10000000, GIF_REG_AD, 0, 0, 0, 0x50, 0 };
+    u64 bitblt = ((s64)tbp << 32) | ((u64)blt << 48);
+
+    pkt[8] = (u32)bitblt;
+    pkt[9] = (u32)(bitblt >> 32);
+    Dma_AddData(pkt, sizeof(pkt));
+}
+#endif
+
 /* Queues the upload of a texture's pixels to GS block `tbp`. */
 void Tex_UploadPixels(TexEntry *e, s32 tbp) {
     if (e->pixOfs != 0) {
+#if defined(PORT_PS3)
+        Tex_QueueBlt(tbp, e->pixBlt);
+        Dma_AddRefLe(Port_Ptr(e->pix), e->pixSize);
+#else
         gTexBltPacket.bitbltbuf = ((s64)tbp << 32) | ((u64)e->pixBlt << 48);
         Dma_AddData(&gTexBltPacket, sizeof(TexBltPacket));
         Dma_AddRef(e->pix, e->pixSize);
+#endif
     }
 }
 
 /* Queues the upload of a texture's CLUT to GS block `cbp`. */
 void Tex_UploadClut(TexEntry *e, s32 cbp) {
     if (e->clutOfs != 0) {
+#if defined(PORT_PS3)
+        Tex_QueueBlt(cbp, e->clutBlt);
+        Dma_AddRefLe(Port_Ptr(e->clut), e->clutSize);
+#else
         gTexBltPacket.bitbltbuf = ((s64)cbp << 32) | ((u64)e->clutBlt << 48);
         Dma_AddData(&gTexBltPacket, sizeof(TexBltPacket));
         Dma_AddRef(e->clut, e->clutSize);
+#endif
     }
 }
 

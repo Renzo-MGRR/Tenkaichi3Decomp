@@ -17,6 +17,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(PORT_PS3)
+#include <unistd.h>
+#include "ps3_config.h"
+#endif
 
 #define HEAP_BASE 0x003BE000u  /* page that holds the first address */
 #define HEAP_FIRST 0x003BE730u /* what the PS2's malloc returns for the game heap (gHeapStart in a PCSX2 save state) */
@@ -24,9 +28,14 @@
 
 static uint32_t sHeapNext = HEAP_FIRST, sHeapEnd = HEAP_END;
 
+/* Where the port's own region (Port_LowAlloc) is, and where its next block starts. Declared at the top so
+   the platform branches that are written earlier (PS3's Port_GameEnter and Port_MapMemory) can use them. */
+PORT_HOST static uint8_t *sLowArena = NULL; /* where the region is: fixed once it is taken, not game state */
+static uint8_t *sLowNext;
+
 /* The 64-bit builds (the game's pointers 4 bytes wide, ptr32.py) keep the port's blocks for the game in a region of
    their own (Port_LowAlloc); the 32-bit build uses the C library's. */
-#if defined(__x86_64__) || defined(__APPLE__)
+#if defined(__x86_64__) || defined(__APPLE__) || defined(PORT_PS3)
 #define PORT_LOW_REGION 1
 #else
 #define PORT_LOW_REGION 0
@@ -273,6 +282,60 @@ int __wrap_main(int argc, char **argv) {
     return sResult;
 }
 
+#elif defined(PORT_PS3)
+/* -------------------------------------------------------------------------------------------------------- PS3
+   The standard PSL1GHT ELF layout owns the PPU mappings. PS2 guest-address windows use BSS backing (ps3memory.c);
+   the game still runs on its own 16 MB stack through Port_Ptr. */
+#define STACK_BASE 0x02000000u
+#define STACK_SIZE 0x01000000u
+extern int __real_main(int argc, char **argv);
+extern void Port_CallOnStack(void (*fn)(void), void *top);
+PORT_HOST static int sArgc = 0, sResult = 0;
+
+/* fn() with the stack pointer at `top`. r3 = fn's descriptor (code address, then the TOC), r4 = top. */
+__asm__(
+        ".text\n.align 5\n.globl Port_CallOnStack\nPort_CallOnStack:\n"
+        "    mflr 0\n"
+        "    stdu 1, -64(1)\n"
+        "    std 0, 16(1)\n"                 /* the caller's lr */
+        "    std 31, 24(1)\n"                /* (r31 carries our own stack across the call) */
+        "    std 2, 32(1)\n"                 /* the caller's TOC */
+        "    mr 31, 1\n"
+        "    mr 1, 4\n"                      /* the game's stack */
+        "    ld 12, 0(3)\n"
+        "    ld 2, 8(3)\n"
+        "    mtctr 12\n"
+        "    bctrl\n"
+        "    ld 2, 32(31)\n"
+        "    ld 31, 24(31)\n"
+        "    mr 1, 31\n"
+        "    ld 0, 16(1)\n"
+        "    mtlr 0\n"
+        "    addi 1, 1, 64\n"
+        "    blr\n");
+
+static void game_main(void) {
+    sResult = __real_main(sArgc, NULL);
+}
+
+/* Called from port/ps3/main_ps3.c (the crt's main): moves over to the game's stack and runs the game. */
+int Port_GameEnter(int argc, char **argv) {
+    sArgc = argc;
+    sGameStackTop = (uint8_t *)Port_Ptr(STACK_BASE + STACK_SIZE);
+    gPortStage = "the game is running (on its mapped PPU stack)";
+    Port_CallOnStack(game_main, sGameStackTop);
+    return sResult;
+}
+
+/* Nothing to map: the sections are at their addresses already (lv2_bt3.x). */
+static void map_heap(void) {}
+
+static void low_region_take(void) {
+    extern uint8_t *Port_Ps3LowArena(void);
+    sLowArena = Port_Ps3LowArena();
+    sLowNext = sLowArena;
+}
+
 #else
 /* -------------------------------------------------------------------------------------------------------- Linux */
 #include <sys/mman.h>
@@ -353,7 +416,11 @@ int __wrap_main(int argc, char **argv) {
 
 /* Set to 1 in the file by strip_data.py: this program does not work without its list. (2, not 0: it has to be in
    the file, not in the zero-filled part of memory.) */
+#if defined(PORT_PS3)
+volatile uint32_t gPortDataStripped = 1; /* PS3 uses a user-disc data list, like a stripped PC release. */
+#else
 volatile uint32_t gPortDataStripped = 2;
+#endif
 
 static uint8_t *read_file(const char *path, size_t *size) {
     FILE *fp = fopen(path, "rb");
@@ -383,9 +450,26 @@ static void data_fail(const char *what, const char *path) {
     exit(2);
 }
 
+/* The PS2 disc ELF and the .dat manifest are little-endian; the PPU is big-endian. */
+static uint16_t data_le16(const uint8_t *p) {
+    return (uint16_t)p[0] | (uint16_t)p[1] << 8;
+}
+
+static uint32_t data_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static uint64_t data_le64(const uint8_t *p) {
+    return (uint64_t)data_le32(p) | (uint64_t)data_le32(p + 4) << 32;
+}
+
 static void Port_LoadGameData(void) {
     char exe[1024], path[1200];
+#if defined(PORT_PS3)
+    const char *root = getenv("BT3_DATA") != NULL ? getenv("BT3_DATA") : PS3_DATA_ROOT;
+#else
     const char *root = getenv("BT3_DATA") != NULL ? getenv("BT3_DATA") : "gamedata";
+#endif
     uint8_t *list, *elf, *src[2] = {NULL, NULL};
     size_t listSize = 0, elfSize = 0, srcSize[2] = {0, 0};
     uint64_t hash = 0xCBF29CE484222325ull, want;
@@ -395,6 +479,10 @@ static void Port_LoadGameData(void) {
 #elif defined(__APPLE__)
     uint32_t exeSize = sizeof(exe) - 1;
     long n = _NSGetExecutablePath(exe, &exeSize) == 0 ? (long)strlen(exe) : -1;
+#elif defined(PORT_PS3)
+    /* EBOOT.BIN and its data manifest are installed together in USRDIR. */
+    snprintf(exe, sizeof(exe), "%s", PS3_EBOOT_PATH);
+    long n = (long)strlen(exe);
 #else
     long n = (long)readlink("/proc/self/exe", exe, sizeof(exe) - 1);
 #endif
@@ -445,9 +533,9 @@ static void Port_LoadGameData(void) {
     if (listSize < 16 || memcmp(list, "BT3D", 4) != 0) {
         data_fail("damaged file", path);
     }
-    memcpy(&count, list + 4, 4);
-    memcpy(&want, list + 8, 8);
-    if (listSize < 16 + (size_t)count * 16) {
+    count = data_le32(list + 4);
+    want = data_le64(list + 8);
+    if ((size_t)count > (listSize - 16) / 16) {
         data_fail("damaged file", path);
     }
     snprintf(path, sizeof(path), "%s/disc/SLUS_216.78", root);
@@ -456,15 +544,26 @@ static void Port_LoadGameData(void) {
         data_fail("the game's program was not found", path);
     }
     {   /* the loaded sections as one image from 0x100000 */
-        uint32_t shoff, sh[6];
+        uint32_t shoff;
         uint16_t shentsize, shnum;
-        memcpy(&shoff, elf + 0x20, 4);
-        memcpy(&shentsize, elf + 0x2E, 2);
-        memcpy(&shnum, elf + 0x30, 2);
+        shoff = data_le32(elf + 0x20);
+        shentsize = data_le16(elf + 0x2E);
+        shnum = data_le16(elf + 0x30);
+        if (shentsize < 24 || (size_t)shoff > elfSize || (size_t)shnum > (elfSize - shoff) / shentsize) {
+            data_fail("damaged game executable (section table)", path);
+        }
         srcSize[0] = ROM_END - ROM_BASE;
         src[0] = calloc(1, srcSize[0]);
-        for (i = 0; i < shnum && (size_t)shoff + (size_t)(i + 1) * shentsize <= elfSize; i++) {
-            memcpy(sh, elf + shoff + (size_t)i * shentsize, sizeof(sh)); /* name, type, flags, addr, offset, size */
+        if (src[0] == NULL) {
+            data_fail("not enough memory for the game executable image", path);
+        }
+        for (i = 0; i < shnum; i++) {
+            uint32_t sh[6];
+            size_t shAt = (size_t)shoff + (size_t)i * shentsize;
+            unsigned j;
+            for (j = 0; j < 6; j++) {
+                sh[j] = data_le32(elf + shAt + j * 4);
+            }
             if ((sh[2] & 2) && sh[1] != 8 && sh[5] != 0 && sh[3] >= ROM_BASE && sh[3] + sh[5] <= ROM_END &&
                 (size_t)sh[4] + sh[5] <= elfSize) {
                 memcpy(src[0] + (sh[3] - ROM_BASE), elf + sh[4], sh[5]);
@@ -480,12 +579,32 @@ static void Port_LoadGameData(void) {
     for (i = 0; i < count; i++) {
         uint32_t r[4]; /* address in this program, source, offset in it, length */
         const uint8_t *from;
-        memcpy(r, list + 16 + (size_t)i * 16, 16);
-        if (r[1] > 1 || (size_t)r[2] + r[3] > srcSize[r[1]]) {
+        { const uint8_t *record = list + 16 + (size_t)i * 16;
+          r[0] = data_le32(record); r[1] = data_le32(record + 4);
+          r[2] = data_le32(record + 8); r[3] = data_le32(record + 12); }
+        if (r[1] > 1 || (size_t)r[2] > srcSize[r[1]] || (size_t)r[3] > srcSize[r[1]] - r[2]) {
             data_fail("damaged file (list of the game's data)", NULL);
         }
         from = src[r[1]] + r[2];
         memcpy(Port_Ptr(r[0]), from, r[3]);
+#if defined(PORT_PS3)
+        /* The disc data is little-endian; the PPU is big-endian. Swap the multi-byte words of the data sections so
+           the game reads the same numeric values (pointers, counts, floats) as on the PS2. Code sections (.text,
+           .vutext) are left untouched. */
+        {
+            int is_code = (r[0] >= 0x100000u && r[0] < 0x2C3380u);
+            if (!is_code && (r[3] % 4) == 0) {
+                uint32_t *w = (uint32_t *)Port_Ptr(r[0]);
+                size_t nw = r[3] / 4;
+                size_t wi;
+                for (wi = 0; wi < nw; wi++) {
+                    uint32_t v = w[wi];
+                    w[wi] = ((v & 0x000000FFu) << 24) | ((v & 0x0000FF00u) << 8) |
+                             ((v & 0x00FF0000u) >> 8) | ((v & 0xFF000000u) >> 24);
+                }
+            }
+        }
+#endif
         for (k = 0; k < r[3]; k++) {
             hash = (hash ^ from[k]) * 0x100000001B3ull;
         }
@@ -501,10 +620,12 @@ static void Port_LoadGameData(void) {
 #if PORT_LOW_REGION
 /* (between the GS registers at 0x12000000 and the program at 0x20000000: see the note at STACK_BASE) */
 #define LOW_ARENA_BASE 0x13000000u
+#if defined(PORT_PS3)
+#define LOW_ARENA_SIZE 0x03000000u /* 48 MB ceiling for the PS3 build */
+#else
 #define LOW_ARENA_SIZE 0x0C000000u /* address space only: pages are taken as they are first used */
+#endif
 enum { LOW_SIZES = 256 };
-PORT_HOST static uint8_t *sLowArena = NULL; /* where the region is: fixed once it is taken, not game state */
-static uint8_t *sLowNext;
 #ifdef _WIN32
 PORT_HOST static uint8_t *sLowCommitted = NULL; /* how far the region's pages are committed (never given back) */
 #endif
@@ -611,7 +732,12 @@ __attribute__((constructor)) static void Port_MapMemory(void) {
     gPortStage = "reading the game's programs from gamedata";
     Port_LoadGameData();
     gPortStage = "reserving the game's memory";
-#if defined(__APPLE__)
+#if defined(PORT_PS3)
+    /* PS2-visible windows are translated to BSS backing by Port_Ptr; the low arena stays 48 MB. */
+    extern uint8_t *Port_Ps3LowArena(void);
+    sLowArena = Port_Ps3LowArena();
+    sLowNext = sLowArena;
+#elif defined(__APPLE__)
     map(STACK_BASE, STACK_SIZE, "the game thread's stack");
     low_region_take(); /* the region of Port_LowAlloc, now (see there) */
 #elif defined(__x86_64__) && !defined(_WIN32)
@@ -624,9 +750,11 @@ __attribute__((constructor)) static void Port_MapMemory(void) {
     low_region_take();
 #endif
     map_heap();
+#if !defined(PORT_PS3)
     map(0x10000000u, 0x10000, "the hardware registers");
     map(0x12000000u, 0x2000, "the GS registers");
     map(0x70000000u, 0x4000, "the scratchpad");
+#endif
     gPortStage = "memory ready, before the program's main";
 }
 
@@ -646,6 +774,7 @@ void *Port_Malloc(uint32_t size) {
    4 GB in the 64-bit build, where the game keeps such an address in 4 bytes. The C library's malloc is not safe
    for this there: it moves to mappings far above 4 GB whenever the break area cannot grow. */
 #if PORT_LOW_REGION
+#if !defined(PORT_PS3)
 /* Takes the region of Port_LowAlloc. At the program's start (Port_MapMemory), before anything else can sit at its
    address and before any state is saved: a state restored to before the region existed would otherwise take it a
    second time, somewhere else. */
@@ -680,6 +809,8 @@ static void low_region_take(void) {
 #endif
         sLowNext = sLowArena;
 }
+
+#endif /* !PORT_PS3 */
 
 #endif
 

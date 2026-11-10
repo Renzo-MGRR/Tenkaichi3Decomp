@@ -17,7 +17,16 @@ extern FontIconCommonRes *gCommonRes;
 extern void Res_RelocateOffsets(void *out, void *res, void *base);
 extern void TexFile_UploadAll(FontIconRes *res, s32 tbp, s32 cbp); /* uploads every texture of a file */
 
+#if defined(PORT_PS3)
+/* The PS2 build keeps this pointer in a 4-byte data slot (cod_1FEBB0) that sits exactly on top of
+   gFontIconUploaded. On the PS3 the pointer is 8 bytes: the low word overlapped the flag and the tag
+   handler clearing it zeroed the pointer, so the next icon upload called TexFile_UploadAll(NULL).
+   Keep it in a real host pointer instead. */
+static FontIconRes *sFontIconRes;
+#define gFontIconRes sFontIconRes
+#else
 extern FontIconRes *gFontIconRes;
+#endif
 extern s32 gFontIconUploaded;  /* 1 once the icon textures were uploaded for the current flush */
 extern s32 gFontIconPadType;   /* row of gFontIconTables in use */
 extern s32 gFontIconFrame;     /* animation clock */
@@ -466,10 +475,20 @@ void FontTag_Ub0(FontTagDef *def, u64 **pkt, FontCmd *cmd, FontCmd *saved, s32 *
 
 /* Boot-time init: binds the icon file and hooks the printer's callbacks. */
 void FontIcon_Init(void) {
-    u32 *boot = gCommonRes->boot;
+    u32 *boot = gCommonRes != NULL ? gCommonRes->boot : NULL;
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    if (boot == NULL) {
+        Port_StageTrace("FontIcon_Init: missing boot resource; skipped");
+        return;
+    }
+#endif
 
     gFontIconRes = (FontIconRes *)(boot + (boot[8] >> 2));
     Res_RelocateOffsets(&gFontIconRes, gFontIconRes, gFontIconRes);
+#if defined(PORT_PS3)
+    Port_StageTrace(gFontIconRes != NULL ? "FontIcon_Init: icon resource ready" : "FontIcon_Init: icon resource null");
+#endif
     Font_SetBeginCallback(FontIcon_Begin);
     Font_SetTagCallback(FontTag_Handle, &gFontIconPadType);
 }

@@ -83,6 +83,26 @@ void Pad_UpdateGameButtons(s32 pad) {
         btn |= PADG_UP2;
     }
 
+#if defined(PORT_PS3)
+    {
+        /* Boot memory-card prompt: no player is present, so a Cross pulse advances it once the dialog is
+           fully open (Port_BootConfirmWanted waits two seconds and stops when the state changes). Only pad 0
+           owns the pulse counter: pad 1 must not reset it every frame. */
+        extern s32 Port_BootConfirmWanted(void);
+        static u32 sConfirmTick;
+        if (pad == 0) {
+            if (Port_BootConfirmWanted()) {
+                if ((sConfirmTick % 20) == 0) {
+                    btn |= PADG_CROSS;
+                }
+                sConfirmTick++;
+            } else {
+                sConfirmTick = 0;
+            }
+        }
+    }
+#endif
+
     p->gamePressed = btn & ~p->gameHeld;
     p->gameHeld = btn;
     gPad[pad].gameRepeat = Pad_CalcRepeat(btn, p->gamePressed, &p->gameRepeatTimer, &p->gameRepeatLast,

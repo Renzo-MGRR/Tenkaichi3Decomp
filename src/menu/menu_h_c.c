@@ -27,6 +27,9 @@ s32 CharRefMode_Main(void) {
 
     if (gMenuArc9 == NULL) {
         gMenuArc9 = File_LoadSync(gProgress->baseFile + 15, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc9);
+        #endif
     }
     do {
         switch (gProgress->mode) {
@@ -65,6 +68,9 @@ s32 TrainMode_Main(void) {
 
     if (gMenuArc6 == NULL) {
         gMenuArc6 = File_LoadSync(gProgress->baseFile + 13, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc6);
+        #endif
     }
     do {
         switch (gProgress->mode) {

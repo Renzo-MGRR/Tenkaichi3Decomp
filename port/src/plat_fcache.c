@@ -41,10 +41,12 @@ FILE *Port_FileOpenHost(const char *rel, char *path, size_t n) {
             fp = fopen(path, "rb");
         }
     }
+#if !defined(PORT_PS3)
     if (fp == NULL) { /* a file under mods/ wins over the original */
         snprintf(path, n, "%s/mods/%s", Port_FileRoot(), rel);
         fp = fopen(path, "rb");
     }
+#endif
     if (fp == NULL) {
         snprintf(path, n, "%s/%s", Port_FileRoot(), rel);
         fp = fopen(path, "rb");
@@ -65,7 +67,9 @@ static int slot_of(const char *rel) {
     }
     fp = Port_FileOpenHost(rel, path, sizeof(path));
     if (fp == NULL) {
+#if !defined(PORT_PS3)
         fprintf(stderr, "bt3: file not found: %s\n", path);
+#endif
         return -1;
     }
     for (i = 0; i < SLOTS; i++) {

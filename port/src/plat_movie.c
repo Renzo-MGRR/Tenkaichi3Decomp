@@ -1,5 +1,5 @@
 /*
- * Movies on PC: Sony's libmpeg (sceMpeg*) as the game's movie player uses it (src/sys/movie.c).
+ * Movies in the PC and PS3 ports: the game's sceMpeg interface is backed by the local MPEG2 decoder below.
  *
  * On the PS2 the game reads the .PSS file itself, hands the bytes to the library to split off the video stream,
  * and asks for one decoded picture per frame. A picture comes back as 16 x 16 blocks of RGBA, columns first, which
@@ -19,6 +19,12 @@ extern int Port_NetSession(void); /* gs/net.c: no movies in an online session */
 #define MOVIE_W 512
 #define MOVIE_H 448
 
+#if defined(PORT_PS3)
+extern void Port_StageTrace(const char *what);
+extern void Port_StageTracePtr(const char *what, const void *ptr);
+extern void Port_StageTraceInt(const char *what, long value);
+#endif
+
 extern char gPortMoviePath[512];
 extern int GsGpu_Enabled(void);
 
@@ -32,6 +38,9 @@ extern void Mpeg2_Close(Mpeg2 *m);
 static Mpeg2 *sMovie;
 static int sStarted, sEnd;
 static uint8_t sFrame[MOVIE_W * MOVIE_H * 4];
+#if defined(PORT_PS3)
+static int sPicCount;
+#endif
 
 static void movie_close(void) {
     if (sMovie != NULL) {
@@ -45,11 +54,22 @@ static void movie_close(void) {
 static void movie_start(void) {
     sStarted = 1;
     sEnd = 1;
+#if defined(PORT_PS3)
+    Port_StageTrace("movie_start: enter");
+#endif
     /* without a window too when recorded input is played back: the movie has to take the same number of frames */
+#if defined(PORT_PS3)
+    /* The RSX presenter also displays frames from the software GS path. */
+    if (gPortMoviePath[0] == '\0' || getenv("BT3_NOMOVIE") != NULL || Port_NetSession()) {
+#else
     if ((!GsGpu_Enabled() && getenv("BT3_PAD_PLAY") == NULL) || gPortMoviePath[0] == '\0' || getenv("BT3_NOMOVIE") != NULL || Port_NetSession()) {
+#endif
         return;
     }
     sMovie = Mpeg2_Open(gPortMoviePath);
+#if defined(PORT_PS3)
+    Port_StageTracePtr("movie_start: decoder", sMovie);
+#endif
     sEnd = sMovie == NULL;
 }
 
@@ -79,9 +99,23 @@ int sceMpegGetPicture(void *mp, void *rgb, int blocks) {
     if (!sStarted) {
         movie_start();
     }
-    if (sMovie == NULL || !Mpeg2_Next(sMovie, sFrame) || Mpeg2_Width(sMovie) != MOVIE_W || Mpeg2_Height(sMovie) != MOVIE_H) {
-        sEnd = 1;
-        return -1;
+#if defined(PORT_PS3)
+    if (sPicCount < 3) { Port_StageTraceInt("sceMpegGetPicture: call", sPicCount); }
+#endif
+    {
+        int nextOk = sMovie != NULL ? Mpeg2_Next(sMovie, sFrame) : 0;
+#if defined(PORT_PS3)
+        if (sPicCount < 3) {
+            Port_StageTraceInt("sceMpegGetPicture: next", nextOk);
+            Port_StageTraceInt("sceMpegGetPicture: width", sMovie != NULL ? Mpeg2_Width(sMovie) : 0);
+            Port_StageTraceInt("sceMpegGetPicture: height", sMovie != NULL ? Mpeg2_Height(sMovie) : 0);
+            sPicCount++;
+        }
+#endif
+        if (!nextOk || Mpeg2_Width(sMovie) != MOVIE_W || Mpeg2_Height(sMovie) != MOVIE_H) {
+            sEnd = 1;
+            return -1;
+        }
     }
     for (i = 0; i < cols; i++) {
         for (j = 0; j < rows && i * rows + j < blocks; j++) {

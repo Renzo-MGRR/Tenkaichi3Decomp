@@ -31,6 +31,9 @@ s32 EvoMode_Main(void) {
     EVO_PROGRESS_CURSOR = -1;
     if (gMenuArc7 == NULL) {
         gMenuArc7 = File_LoadSync(gProgress->baseFile + 4, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc7);
+        #endif
     }
     do {
         switch (gProgress->mode) {

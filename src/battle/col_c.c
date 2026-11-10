@@ -9,6 +9,11 @@
  */
 #include "common.h"
 #include "battle/col_b.h"
+#include "sys/common.h"
+#if defined(PORT_PS3)
+#include "../../port/src/port_addr.h"
+extern void Port_StageTrace(const char *what);
+#endif
 
 extern u64 *Dma_BeginDirect(void);
 extern void Dma_EndDirect(u64 *end);
@@ -91,11 +96,7 @@ void Font_PutSprite(CbFontOut *out, s32 x0, s32 y0, s32 x1, s32 y1, s32 u0, s32 
  * Font_EndPacket defined above it in the same file, which is why the five packet helpers were merged in.
  */
 
-typedef struct FontCommonRes {
-    /* 0x00 */ u32 *boot; /* CommonRes.boot: header of byte offsets, +4 / +8 the two fonts, +0x20 the icons */
-} FontCommonRes;
-
-extern FontCommonRes *gCommonRes;
+extern CommonRes *gCommonRes;
 
 extern void *Heap_Alloc(s32 size, u32 align, s32 fromTail, s32 heap);
 extern void Heap_Free(void *ptr);
@@ -118,16 +119,30 @@ extern s32 gFontReady;         /* 1 between Font_InitEx and Font_Term */
 extern s32 gFontEnabled;
 extern s32 gFontGlyphGap;      /* added after every glyph; always 0 */
 extern s32 gFontLineHeight;    /* line height of the font set last */
+#if defined(PORT_PS3)
+/* These original globals are four-byte PS2 slots. Native PPU pointers are 64-bit, so keep
+   the active work buffers in separate native storage instead of widening those game fields. */
+static FontSlot *sFontSlots;
+static FontCursor *sFontCursorStack;
+static FontStyle *sFontStyleStack;
+static FontCmd *sFontCmds;
+#define gFontSlots sFontSlots
+#define gFontCursorStack sFontCursorStack
+#define gFontStyleStack sFontStyleStack
+#define gFontCmds sFontCmds
+#else
 extern FontSlot *gFontSlots;
 extern FontCursor *gFontCursorStack;
 extern FontStyle *gFontStyleStack;
 extern FontCmd *gFontCmds;
+#endif
 extern s32 gFontCursorDepth;
 extern s32 gFontStyleDepth;
 extern s32 gFontCmdCount;
 extern s32 gFontCmdMax;
 
 void Font_InitEx(s32 unused, s32 maxCmds);
+void Font_Term(void);
 void Font_Flush(s32 first);
 s32 Font_MeasureWidthEx(void *str, s32 kind, f32 scale);
 s32 Font_CountLinesEx(void *str, s32 kind);
@@ -178,9 +193,25 @@ void Font_OpenSpriteTag(u64 **pkt, u64 **tag) {
     *pkt += 2;
 }
 
-/* Patches the tag opened by Font_OpenSpriteTag with the number of sprites written since. */
+/* Patches the tag opened by Font_OpenSpriteTag with the number of sprites written since. The PS2 original writes a
+   16-bit halfword at the start of the tag; that is the low half (NLOOP) only on the little-endian PS2/PC. On the
+   big-endian PS3 it would replace the NREG nibble and leave NLOOP 0, so patch the tag word itself. */
 void Font_CloseSpriteTag(u64 **pkt, u64 **tag) {
-    *(u16 *)*tag = ((*pkt - *tag) - 2) / 6;
+    u64 count = (u64)(((*pkt - *tag) - 2) / 6);
+
+    **tag = (**tag & ~(u64)0x7FFF) | (count & 0x7FFF);
+#if defined(PORT_PS3)
+    {
+        static s32 n;
+        if (n < 12) {
+            char b[112];
+            snprintf(b, sizeof(b), "FTAG n=%d count=%d tag=%016llx", (int)n, (int)count,
+                     (unsigned long long)**tag);
+            Port_StageTrace(b);
+            n++;
+        }
+    }
+#endif
 }
 
 /* GS TEX0 value of a font's texture with CLUT number clut (0..3). */
@@ -202,6 +233,24 @@ void Font_UploadTexture(FontSlot *slot) {
         MenuText_RegisterGlyphs(slot->tbp, slot->cbp, slot->data->glyphs, slot->data->glyphCount, slot->lineHeight);
     }
 #endif
+#if defined(PORT_PS3)
+    {
+        static s32 n;
+        if (n < 16) {
+            char b[224];
+            u32 *w = (u32 *)slot->data->tex;
+            snprintf(b, sizeof(b),
+                     "FONTUPL n=%d slot=%d tbp=%x cbp=%x glyphs=%08x cnt=%d lh=%d tex=%08x w8=%08x w18=%08x tex0=%08x%08x",
+                     (int)n, (int)(slot - gFontSlots), (unsigned)slot->tbp, (unsigned)slot->cbp,
+                     (unsigned)Port_Addr(slot->data->glyphs), (int)slot->data->glyphCount,
+                     (int)slot->lineHeight, (unsigned)Port_Addr(slot->data->tex),
+                     (unsigned)w[2], (unsigned)w[6],
+                     (unsigned)(slot->data->tex->tex0 >> 32), (unsigned)slot->data->tex->tex0);
+            Port_StageTrace(b);
+            n++;
+        }
+    }
+#endif
     Tex_Upload(slot->data->tex, slot->tbp, slot->cbp);
 }
 
@@ -213,6 +262,13 @@ void Font_Init(s32 unused) {
 /* Resets cursor and style, allocates the slots, stacks and command queue, binds the two fonts of the boot file. */
 void Font_InitEx(s32 unused, s32 maxCmds) {
     u32 *boot;
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    FontData *font[2];
+    static FontData runtimeFont[2];
+    u8 *bootBytes;
+    u32 i;
+#endif
 
     gFontReady = 1;
     gFontEnabled = 1;
@@ -241,18 +297,109 @@ void Font_InitEx(s32 unused, s32 maxCmds) {
     gFontStyle.begin = NULL;
     gFontStyle.tag = NULL;
     gFontStyle.tagArg = NULL;
+#if defined(PORT_PS3)
+    Port_StageTrace("Font_Init: allocating slots");
+#endif
     gFontSlots = Heap_Alloc(FONT_SLOT_COUNT * sizeof(FontSlot), 0x20, 0, 2);
+#if defined(PORT_PS3)
+    if (gFontSlots == NULL) goto alloc_failed;
+    Port_StageTrace("Font_Init: allocating cursor stack");
+#endif
     gFontCursorStack = Heap_Alloc(FONT_STACK_DEPTH * sizeof(FontCursor), 0x20, 0, 2);
+#if defined(PORT_PS3)
+    if (gFontCursorStack == NULL) goto alloc_failed;
+    Port_StageTrace("Font_Init: allocating style stack");
+#endif
     gFontStyleStack = Heap_Alloc(FONT_STACK_DEPTH * sizeof(FontStyle), 0x20, 0, 2);
+#if defined(PORT_PS3)
+    if (gFontStyleStack == NULL) goto alloc_failed;
+    Port_StageTrace("Font_Init: allocating command buffer");
+#endif
     gFontCmds = Heap_Alloc(maxCmds * sizeof(FontCmd), 0x20, 0, 2);
+#if defined(PORT_PS3)
+    if (gFontCmds == NULL) goto alloc_failed;
+    Port_StageTrace("Font_Init: allocations ready");
+#endif
     gFontCursorDepth = 0;
     gFontCmdMax = maxCmds;
     gFontStyleDepth = 0;
     gFontCmdCount = 0;
+#if defined(PORT_PS3)
+    Port_StageTrace("Font_Init: state reset");
+#endif
     memset(gFontSlots, 0, FONT_SLOT_COUNT * sizeof(FontSlot));
-    boot = gCommonRes->boot;
+#if defined(PORT_PS3)
+    Port_StageTrace("Font_Init: slot array cleared");
+#endif
+    boot = gCommonRes != NULL ? gCommonRes->boot : NULL;
+#if defined(PORT_PS3)
+    {
+        char trace[80];
+        snprintf(trace, sizeof(trace), "Font_Init: gCommonRes=%08x boot=%08x",
+                 (u32)Port_Addr(gCommonRes), (u32)Port_Addr(boot));
+        Port_StageTrace(trace);
+    }
+    Port_StageTrace(boot != NULL ? "Font_Init: boot pointer found" : "Font_Init: boot pointer is null");
+#endif
+#if defined(PORT_PS3)
+    if (boot == NULL || Common_BootSize() < 12) {
+        Port_StageTrace("Font_Init: missing boot font resource");
+        Font_Term();
+        return;
+    }
+    /* The boot file stores the PS2's 32-bit FontData/FontTex layout. Build native PPU
+       objects here instead of reading the file bytes through native pointer members. */
+    bootBytes = (u8 *)boot;
+    for (i = 0; i < 2; i++) {
+        u32 offset = boot[i + 1];
+        u32 size = (u32)Common_BootSize();
+        u8 *diskFont;
+        u32 texOffset, glyphOffset, glyphCount;
+        u8 *diskTex;
+        FontTex *tex;
+        Port_StageTrace(i == 0 ? "Font_Init: validating font 0" : "Font_Init: validating font 1");
+        if ((offset & 3) != 0 || offset > size || size - offset < 0x24) {
+            Port_StageTrace("Font_Init: invalid font offset table");
+            Font_Term();
+            return;
+        }
+        diskFont = bootBytes + offset;
+        texOffset = *(u32 *)(diskFont + 0x0C);
+        glyphOffset = *(u32 *)(diskFont + 0x14);
+        glyphCount = *(u32 *)(diskFont + 0x18);
+        if (texOffset > size - offset || size - offset - texOffset < 0x40 ||
+            glyphOffset > size - offset || glyphCount > (size - offset - glyphOffset) / sizeof(FontGlyph)) {
+            Port_StageTrace("Font_Init: invalid font data bounds");
+            Font_Term();
+            return;
+        }
+        diskTex = diskFont + texOffset;
+        tex = (FontTex *)diskTex;
+        tex->pixelsPtr = (s32)Port_Addr(diskFont + tex->pixels);
+        tex->clutPtr = (s32)Port_Addr(diskFont + tex->clut);
+        memset(&runtimeFont[i], 0, sizeof(runtimeFont[i]));
+        memcpy(&runtimeFont[i], diskFont, 12);
+        runtimeFont[i].tex = tex;
+        runtimeFont[i].unk10 = *(s32 *)(diskFont + 0x10);
+        runtimeFont[i].glyphs = (FontGlyph *)(diskFont + glyphOffset);
+        runtimeFont[i].glyphCount = (s32)glyphCount;
+        runtimeFont[i].unk1C = *(s32 *)(diskFont + 0x1C);
+        runtimeFont[i].lineHeight = *(s32 *)(diskFont + 0x20);
+        font[i] = &runtimeFont[i];
+    }
+    Port_StageTrace("Font_Init: boot font data validated");
+    Font_SetFont(0, font[0]);
+    Font_SetFont(1, font[1]);
+    Port_StageTrace("Font_Init: fonts bound");
+    return;
+alloc_failed:
+    Port_StageTrace("Font_Init: game heap allocation failed");
+    Font_Term();
+    return;
+#else
     Font_SetFont(0, (FontData *)(boot + (boot[1] >> 2)));
     Font_SetFont(1, (FontData *)(boot + (boot[2] >> 2)));
+#endif
 }
 
 /* Frees everything Font_InitEx allocated. */
@@ -312,6 +459,26 @@ void Font_Flush(s32 first) {
     s32 i;
 
     if (gFontReady && gFontEnabled && first < gFontCmdCount) {
+#if defined(PORT_PS3)
+        {
+            static s32 n;
+            if (n < 16) {
+                char b[160];
+                s32 j, lim;
+                snprintf(b, sizeof(b), "FFLUSH n=%d ready=%d en=%d first=%d count=%d",
+                         (int)n, (int)gFontReady, (int)gFontEnabled, (int)first, (int)gFontCmdCount);
+                Port_StageTrace(b);
+                lim = gFontCmdCount < first + 4 ? gFontCmdCount : first + 4;
+                for (j = first; j < lim; j++) {
+                    snprintf(b, sizeof(b), "FCMD %d kind=%d arg=%08x xy=%d,%d",
+                             (int)(j - first), (int)gFontCmds[j].kind, (unsigned)gFontCmds[j].arg,
+                             (int)gFontCmds[j].x, (int)gFontCmds[j].y);
+                    Port_StageTrace(b);
+                }
+                n++;
+            }
+        }
+#endif
         slot = gFontSlots;
         for (i = 0; i < FONT_SLOT_COUNT; i++, slot++) {
             if (slot->data != NULL) {
@@ -518,6 +685,20 @@ void Font_Print(u16 *str) {
 void Font_PrintAt(s32 x, s32 y, u16 *str) {
 #ifdef PORT
     str = (u16 *)UiText_TranslateString(str);
+#endif
+#if defined(PORT_PS3)
+    {
+        static s32 n;
+        if (n < 16) {
+            char b[160];
+            snprintf(b, sizeof(b), "FPRINT n=%d xy=%d,%d str=%08x w=%04x %04x %04x %04x",
+                     (int)n, (int)x, (int)y, (unsigned)Port_Addr(str),
+                     str != NULL ? str[0] : 0, str != NULL ? str[1] : 0,
+                     str != NULL ? str[2] : 0, str != NULL ? str[3] : 0);
+            Port_StageTrace(b);
+            n++;
+        }
+    }
 #endif
     Font_AddCmdAt(x, y, (s32)str, 0, FONT_CMD_STR16);
 }
@@ -1146,6 +1327,9 @@ void Font_SetFont(s32 slot, FontData *data) {
     FontTex *tex;
     FontSlot *s;
 
+#if defined(PORT_PS3)
+    tex = data->tex;
+#else
     if ((u32)data->tex < (u32)data) {
         tex = (FontTex *)((u32)data->tex + (u32)data);
         data->tex = tex;
@@ -1153,6 +1337,7 @@ void Font_SetFont(s32 slot, FontData *data) {
         tex->pixelsPtr = tex->pixels + (s32)data;
         tex->clutPtr = tex->clut + (s32)data;
     }
+#endif
     s = &gFontSlots[slot];
     s->cbp = slot * 0x208 + 0x2A00;
     s->tbp = slot * 0x208 + 0x2A08;
@@ -1190,6 +1375,17 @@ s32 Font_DrawGlyph(u64 **pkt, FontCmd *cmd, s32 x, s32 y, u16 ch) {
     shadowColor = cmd->shadowColor;
     glyph = Font_FindGlyph(ch, &slot);
     if (glyph == NULL) {
+#if defined(PORT_PS3)
+        {
+            static s32 n;
+            if (n < 16) {
+                char b[80];
+                snprintf(b, sizeof(b), "FGLYPH miss ch=%04x", (unsigned)ch);
+                Port_StageTrace(b);
+                n++;
+            }
+        }
+#endif
         return 0;
     }
     sx0 = 0;
@@ -1205,6 +1401,22 @@ s32 Font_DrawGlyph(u64 **pkt, FontCmd *cmd, s32 x, s32 y, u16 ch) {
     sx1 = 0;
     sy1 = 0;
     tex0 = Font_MakeTex0(slot, ((glyph->v >> 15) << 1) + (glyph->u >> 15));
+#if defined(PORT_PS3)
+    {
+        static s32 n;
+        if (n < 48) {
+            char b[224];
+            snprintf(b, sizeof(b),
+                     "FGLYPH n=%d ch=%04x u=%04x v=%04x w=%d h=%d xy=%d,%d scale=%d,%d tbp=%x cbp=%x tex0=%08x%08x",
+                     (int)n, (unsigned)ch, (unsigned)glyph->u, (unsigned)glyph->v, (int)w, (int)h, (int)x, (int)y,
+                     (int)(cmd->scaleX * 100.0f), (int)(cmd->scaleY * 100.0f),
+                     (unsigned)slot->tbp, (unsigned)slot->cbp,
+                     (unsigned)(tex0 >> 32), (unsigned)tex0);
+            Port_StageTrace(b);
+            n++;
+        }
+    }
+#endif
     dx = cmd->shadowDx;
     dy = cmd->shadowDy;
     switch (cmd->shadowMode) {

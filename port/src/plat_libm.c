@@ -37,6 +37,10 @@ int32_t __fixdfsi(uint64_t a) { return (int32_t)d(a); }
 uint32_t __fixunsdfsi(uint64_t a) { return (uint32_t)d(a); }
 uint64_t __floatsidf(int32_t v) { return q((double)v); }
 uint64_t __floatunsidf(uint32_t v) { return q((double)v); }
+/* clang's soft-float code asks for this one for a 64-bit -> float/double cast. It used to be a diagnostic
+   placeholder returning 0, which silently dropped every GS XYOFFSET from vertex coordinates (and would
+   distort any other 64-bit-to-float conversion in the game). */
+uint64_t __floatundidf(uint64_t v) { return q((double)v); }
 static int dcmp(uint64_t a, uint64_t b) { return d(a) < d(b) ? -1 : d(a) > d(b) ? 1 : 0; }
 int __eqdf2(uint64_t a, uint64_t b) { return dcmp(a, b); }
 int __nedf2(uint64_t a, uint64_t b) { return dcmp(a, b); }

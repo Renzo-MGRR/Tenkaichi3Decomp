@@ -2134,7 +2134,7 @@ jtbl_002FB1A0:
     .space 1
     .zero 3
     .space 1
-.globl _ctype_
+.weak _ctype_
 _ctype_:
     .space 264
 .globl D_002FB368

@@ -66,8 +66,19 @@ s32 Progress_Main(s32 arg) {
 
     Pad_SetRepeat(0x28, 3);
     if (gProgress->flags & MPROG_FIRST_RUN) {
+#if defined(PORT_PS3)
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Progress_Main: first-run flag set");
+#endif
         FirstRun_Main();
         gProgress->flags &= ~MPROG_FIRST_RUN;
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTrace(const char *what);
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Progress_Main: after first run, mode", gProgress->mode);
+        }
+#endif
     }
     flags = BattleResult_GetFlags();
     reason = BattleResult_GetReason();
@@ -118,23 +129,80 @@ s32 Progress_Main(s32 arg) {
 #endif
     }
     if (gProgress->mode == 1 || gProgress->mode == 4) {
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Progress_Main: arc1 file id", gProgress->baseFile + 1);
+        }
+#endif
         if (gMenuArc1 == NULL) {
             gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
+            #if defined(PORT_PS3)
+            File_FixPackTable(gMenuArc1);
+            #endif
         }
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTracePtr(const char *what, const void *ptr);
+            Port_StageTracePtr("Progress_Main: arc1 loaded", gMenuArc1);
+        }
+#endif
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Progress_Main: loading sound bank 14C");
+    }
+#endif
     Snd_LoadBankFile(2, 0x14C);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Progress_Main: sound bank done");
+    }
+#endif
 
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Progress_Main: entering mode loop");
+    }
+#endif
     do {
         switch (gProgress->mode) {
         case 2:
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                Port_StageTrace("Progress_Main: opening movie enter");
+            }
+#endif
             PadWatch_SetEnabled(0);
             Movie_PlayOpening();
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                Port_StageTrace("Progress_Main: opening movie done");
+            }
+#endif
             PadWatch_SetEnabled(1);
             gProgress->mode = 1;
             break;
         case 1:
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                Port_StageTrace("Progress_Main: Title_Run enter");
+            }
+#endif
             Bgm_Play(MENU_BGM_TITLE);
             ret = Title_Run(1);
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTraceInt(const char *what, long value);
+                Port_StageTraceInt("Progress_Main: Title_Run returned", ret);
+            }
+#endif
             Adx_StopAll();
             switch (ret) {
             case 1:
@@ -150,6 +218,12 @@ s32 Progress_Main(s32 arg) {
             }
             break;
         case 4:
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                Port_StageTrace("Progress_Main: MainMenu_Run enter");
+            }
+#endif
             Bgm_Play(MENU_BGM_TITLE);
             if (MainMenu_Run(2)) {
                 Adx_StopAll();

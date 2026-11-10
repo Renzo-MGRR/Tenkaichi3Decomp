@@ -108,6 +108,7 @@ FileReqQueue *File_GetRequestQueue(void);
 void *File_LoadSyncEx(s32 id, char *name, void *buf, s32 unused);
 void *File_LoadSyncByName(char *name, void *buf, s32 unused);
 void *File_LoadSync(s32 id, void *buf, s32 unused);
+void File_FixPackTable(void *pack);
 s32 File_GetSize(s32 id);
 ADXF File_OpenById(s32 id);
 void File_StartAdxById(ADXT_HN adxt, s32 id);

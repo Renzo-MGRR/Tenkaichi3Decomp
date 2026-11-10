@@ -12,17 +12,36 @@
 
 /* Flash (the movie object), as far as it is read here. */
 typedef struct FlashDMovie {
+#if defined(PORT_PS3)
+    /* 0x00 */ u8 unk00[0x1C];
+    /* 0x1C */ s32 speed;        /* frames per tick */
+#else
     /* 0x00 */ u8 unk00[0x14];
     /* 0x14 */ s32 speed;        /* frames per tick */
+#endif
 } FlashDMovie;
 
 /* FlashTl: a timeline. */
 typedef struct FlashDTl {
+#if defined(PORT_PS3)
+    /* The PS3 build keeps the real pointers, so the timeline is 0x28 bytes and its fields are
+       shifted by four bytes after the first two pointers. */
+    /* 0x00 */ FlashDMovie *owner;
+    /* 0x08 */ void *slots;      /* FlashSlot *, `depths` entries */
+    /* 0x10 */ u8 *frames;       /* the named frame blocks, after the 8-byte record header */
+    /* 0x18 */ u32 frame;        /* frame to run next */
+    /* 0x1C */ u32 prev;         /* frame the last label jump left */
+    /* 0x20 */ u8 unk14;
+    /* 0x21 */ u8 state;         /* FLASH_TL_: bit 4 = a jump set the frame, the display list must be rebuilt */
+    /* 0x22 */ u16 depths;
+} FlashDTl; /* size 0x28 */
+#else
     /* 0x00 */ FlashDMovie *owner;
     /* 0x04 */ u8 unk04[0x11];
     /* 0x15 */ u8 state;         /* FLASH_TL_: bit 4 = a jump set the frame, the display list must be rebuilt */
     /* 0x16 */ u8 unk16[2];
 } FlashDTl; /* size 0x18 */
+#endif
 
 #define FLASHD_TL_GOTO 0x04
 
@@ -47,6 +66,40 @@ typedef struct FlashDUv {
 
 /* FlashClip: one sprite instance. Instances with the same name follow each other in the list. */
 typedef struct FlashDClip {
+#if defined(PORT_PS3)
+    /* The PS3 build's FlashClip is the natural host layout of sys/gfxm_c.h: the six callbacks are
+       8-byte pointers, so four bytes of padding precede them and the timeline starts at 0xE8. */
+    /* 0x00 */ char name[0x40];
+    /* 0x40 */ u16 id;           /* record of tag 6 (the sprite's frames) */
+    /* 0x42 */ u16 index;        /* own index in the list */
+    /* 0x44 */ u32 flags;        /* FLASH_CLIP_ */
+    /* 0x48 */ s32 ovFlags;      /* prop.flags: FLASH_OV_ */
+    /* 0x4C */ f32 ovX;          /* prop.x */
+    /* 0x50 */ f32 ovY;
+    /* 0x54 */ f32 ovAlpha;      /* clamped to 0..1 */
+    /* 0x58 */ f32 ovScaleX;
+    /* 0x5C */ f32 ovScaleY;
+    /* 0x60 */ f32 ovColor;      /* clamped to 0..1 */
+    /* 0x64 */ FlashDUv ovUv;
+    /* 0x74 */ s32 ovTex;
+    /* 0x78 */ u8 unk78[8];      /* prop.mtx: flag word, scale x */
+    /* 0x80 */ f32 x;            /* prop.mtx translation x */
+    /* 0x84 */ u8 unk84[8];
+    /* 0x8C */ f32 y;            /* prop.mtx translation y */
+    /* 0x90 */ u8 unk90[0x18];
+    /* 0xA8 */ f32 alphaMul;     /* prop.cx: alpha multiplier */
+    /* 0xAC */ u8 unkAC[6];
+    /* 0xB2 */ s16 alphaAdd;     /* prop.cx: alpha term */
+    /* 0xB4 */ u8 padB4[4];      /* align the host callback pointers */
+    /* 0xB8 */ void *preDraw;    /* void (*)(void *arg) */
+    /* 0xC0 */ void *postDraw;
+    /* 0xC8 */ void *preArg;
+    /* 0xD0 */ void *postArg;
+    /* 0xD8 */ void *drawOver;   /* void (*)(void *arg, FlashProp *prop) */
+    /* 0xE0 */ void *overArg;
+    /* 0xE8 */ FlashDTl tl;
+} FlashDClip; /* size 0x110 */
+#else
     /* 0x00 */ char name[0x44];  /* (0x40 bytes of name, then id and index) */
     /* 0x44 */ s32 flags;        /* FLASH_CLIP_ */
     /* 0x48 */ s32 ovFlags;      /* prop.flags: FLASH_OV_ */
@@ -74,6 +127,7 @@ typedef struct FlashDClip {
     /* 0xC8 */ s32 overArg;
     /* 0xCC */ FlashDTl tl;
 } FlashDClip; /* size 0xE4 */
+#endif
 
 typedef struct FlashDClipList {
     /* 0x00 */ FlashDClip *items;
@@ -87,9 +141,9 @@ typedef struct FlashDRef {
 } FlashDRef;
 
 void FlashClipList_GotoLabel(FlashDClipList *list, FlashDRef *ref, char *label);
-void FlashClipList_SetPreDraw(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 arg);
-void FlashClipList_SetPostDraw(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 arg);
-void FlashClipList_SetDrawOver(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 arg);
+void FlashClipList_SetPreDraw(FlashDClipList *list, FlashDRef *ref, void *fn, void *arg);
+void FlashClipList_SetPostDraw(FlashDClipList *list, FlashDRef *ref, void *fn, void *arg);
+void FlashClipList_SetDrawOver(FlashDClipList *list, FlashDRef *ref, void *fn, void *arg);
 void FlashClipList_SetFlags(FlashDClipList *list, FlashDRef *ref, s32 mask, u8 on);
 void FlashClipList_SetOverride(FlashDClipList *list, FlashDRef *ref, s32 mask, u8 on);
 void FlashClipList_SetOffset(FlashDClipList *list, FlashDRef *ref, s32 x, s32 y);

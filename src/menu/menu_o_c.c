@@ -61,6 +61,9 @@ s32 Ub_Main(void) {
     do {
         if (gMenuArc3 == NULL) {
             gMenuArc3 = File_LoadSync(UO_PROG->baseFile + 3, NULL, 0);
+            #if defined(PORT_PS3)
+            File_FixPackTable(gMenuArc3);
+            #endif
         }
         switch (UO_PROG->mode) {
         case 13:

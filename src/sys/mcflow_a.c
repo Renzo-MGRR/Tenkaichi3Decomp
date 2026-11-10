@@ -1079,6 +1079,22 @@ void McFlow_UpdateLoad(void) {
 
 /* Flow 2: load the system data without asking (boot). */
 void McFlow_UpdateBootLoad(void) {
+#if defined(PORT_PS3)
+    static s32 sLoggedState = -1;
+    extern void Port_StageTrace(const char *what);
+    if (sLoggedState != gMcFlow->state) {
+        switch (gMcFlow->state) {
+        case 0x23: Port_StageTrace("McFlow boot: initial dialog"); break;
+        case 5: Port_StageTrace("McFlow boot: checking card"); break;
+        case 7: Port_StageTrace("McFlow boot: showing card prompt"); break;
+        case 0x25: Port_StageTrace("McFlow boot: continue dialog"); break;
+        case 0x26: Port_StageTrace("McFlow boot: waiting for dialog close"); break;
+        case 0: Port_StageTrace("McFlow boot: finished"); break;
+        default: Port_StageTrace("McFlow boot: state changed"); break;
+        }
+        sLoggedState = gMcFlow->state;
+    }
+#endif
     if (gMcFlow->state == 0) {
         return;
     }
@@ -1361,6 +1377,36 @@ void McFlow_UpdateBootLoad(void) {
 #endif
     Dialog_Draw(1);
 }
+
+#if defined(PORT_PS3)
+/* The PS3 test harness has no player: when the boot card flow is showing an open dialog and waiting for a
+   confirmation, ps3pad-side input synthesis (src/sys/game_pad.c) pulses Cross. Only the four states that
+   actually read a confirmation are included, and only after the window has been fully open for two seconds,
+   so the popup stays on screen long enough to be captured and the logo screens are never skipped by it. */
+s32 Port_BootConfirmWanted(void) {
+    static s32 sOpenFrames;
+    s32 st;
+
+    if (gMcFlow == NULL || gMcFlow->flow != McFlow_UpdateBootLoad) {
+        sOpenFrames = 0;
+        return 0;
+    }
+    st = gMcFlow->state;
+    if (st != 7 && st != 0x15 && st != 0x16 && st != 0x1D) {
+        sOpenFrames = 0;
+        return 0;
+    }
+    if (!Dialog_IsOpen()) {
+        sOpenFrames = 0;
+        return 0;
+    }
+    if (sOpenFrames < 120) {
+        sOpenFrames++;
+        return 0;
+    }
+    return 1;
+}
+#endif
 
 /* Flow 3: create the system data (new game). */
 void McFlow_UpdateNewSave(void) {
@@ -2922,6 +2968,12 @@ void McFlow_Start(s32 mode) {
         gMcFlow->flow = McFlow_UpdateBootLoad;
         gMcFlow->state = 0x23;
         McFlow_SetupRequest(0, 0);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTrace(const char *what);
+            Port_StageTrace("McFlow boot: forcing visible card flow");
+        }
+#endif
         break;
     case MCFLOW_MODE_NEW_SAVE:
         gMcFlow->flow = McFlow_UpdateNewSave;

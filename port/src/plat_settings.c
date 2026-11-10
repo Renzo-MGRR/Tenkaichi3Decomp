@@ -9,10 +9,32 @@
  * (key_p1_cross = an SDL scancode, pad_p1_cross = a controller button, padslot_p1 = which controller,
  * deadzone_p1_ls / deadzone_p1_rs = a stick's deadzone, vibration_p1 and vibration_p1_strength).
  */
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef PORT_PS3
+/* v1 on the PS3 runs the game on one thread (the game's stack, plat_mem.c): the pthread pieces here guard
+   a lazy first read against concurrent settings-window access, which does not exist on the console.
+   The types already come in with <stdio.h> (glibc pulls the pthread kinds for its own locks); only the
+   calls are replaced, and pthread.h itself is not included (its regparm declarations are x86-only;
+   the once/mutex types have nothing to do here, so they are plain). */
+typedef unsigned int port_ps3_once_t;
+typedef void *port_ps3_mutex_t;
+#define pthread_once_t port_ps3_once_t
+#define pthread_mutex_t port_ps3_mutex_t
+#ifndef PTHREAD_ONCE_INIT
+#define PTHREAD_ONCE_INIT 0
+#endif
+#ifndef PTHREAD_MUTEX_INITIALIZER
+#define PTHREAD_MUTEX_INITIALIZER 0
+#endif
+static int PortSet_Once(pthread_once_t *c, void (*fn)(void)) { if (*c == 0) { *c = 1; fn(); } return 0; }
+#define pthread_once(c, fn) PortSet_Once((c), (fn))
+#define pthread_mutex_lock(m) ((void)(m))
+#define pthread_mutex_unlock(m) ((void)(m))
+#else
+#include <pthread.h>
+#endif
 
 #define MAX_SETTINGS 200
 static struct { char name[24]; int value; } sSet[MAX_SETTINGS];
@@ -28,7 +50,11 @@ static pthread_mutex_t sLock = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *path(void) {
     const char *p = getenv("BT3_SETTINGS");
+#if defined(PORT_PS3)
+    return p == NULL ? "/dev_hdd0/game/BT3P00001/USRDIR/bt3_settings.txt" : p[0] == '\0' ? NULL : p;
+#else
     return p == NULL ? "bt3_settings.txt" : p[0] == '\0' ? NULL : p;
+#endif
 }
 
 static void load(void) {

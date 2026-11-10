@@ -4,6 +4,9 @@
 #ifdef PORT
 #include "menu/port_screen.h"
 #endif
+#if defined(PORT_PS3)
+extern void Port_StageTrace(const char *what);
+#endif
 
 Logo *gLogo = NULL; /* 0x3B590C */
 
@@ -46,6 +49,10 @@ void Logo_Term(void) {
  * `frames` + 2 frames, fade out (to black or white). The background partition load is polled every frame.
  */
 void Logo_Show(u32 *pack, s32 section, s32 frames, s32 fade, s32 skip, s32 inBlack, s32 outBlack, s32 fadeFirst) {
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    Port_StageTrace("Logo_Show: begin");
+#endif
     Logo_Init(pack, section, frames);
     if (fadeFirst) {
         LOGO_FADE_OUT(inBlack, fade);
@@ -125,8 +132,14 @@ void Logo_ShowAll(u32 *pack) {
 /* If partition `pt` is not loaded yet, shows the loading screen until it is. */
 void FirstRun_WaitPartition(s32 pt) {
     s32 flags = 0;
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_WaitPartition: begin");
+#endif
 
     if (File_IsPartitionLoaded(pt)) {
+#if defined(PORT_PS3)
+        Port_StageTrace("FirstRun_WaitPartition: already loaded");
+#endif
         return;
     }
     Dma_ResetBuffers();
@@ -160,6 +173,9 @@ void FirstRun_WaitPartition(s32 pt) {
         Load_ReadInput();
     }
     Dma_ResetBuffers();
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_WaitPartition: done");
+#endif
 }
 
 #ifdef PORT
@@ -180,31 +196,79 @@ extern int Port_NetFixedStart(void);
 /* The first-run sequence. Returns 1. */
 s32 FirstRun_Main(void) {
     u32 *res;
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    Port_StageTrace("FirstRun_Main: begin");
+#endif
 
 #ifdef PORT
-    PortLanguage_Run(); /* first choose a language in the game window, before loading the game partition */
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: language setup");
+#endif
+    PortLanguage_Run();
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: language done");
+#endif /* first choose a language in the game window, before loading the game partition */
 #endif
     File_LoadPartitionNw(2);
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: partition 2 requested");
+#endif
     FirstRun_WaitPad(0, 0);
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: pad ready");
+#endif
     PadWatch_SetEnabled(0);
     if (gMenuArc0 == NULL) {
-        gMenuArc0 = File_LoadSync(gProgress->baseFile + 0x19, NULL, 0);
+        s32 menuFile = gProgress->baseFile + 0x19;
+        gMenuArc0 = File_LoadSync(menuFile, NULL, 0);
+#if defined(PORT_PS3)
+        extern void File_ConvertPackHeader(void *pack, s32 size);
+        File_ConvertPackHeader(gMenuArc0, File_GetSize(menuFile));
+#endif
     }
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: entering BootCard_Run");
+#endif
     BootCard_Run(2);
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: BootCard_Run returned");
+#endif
     res = Sprite_Unpack(MPACK_AT(gMenuArc0, 3), NULL, NULL);
     if (FIRSTRUN_SHOW("skip_logos")) {
+#if defined(PORT_PS3)
+        Port_StageTrace("FirstRun_Main: logo sequence");
+#endif
         Logo_ShowAll(res);
     }
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: logos done");
+#endif
     if (res != NULL) {
         Heap_Free(res);
     }
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: logo sprite freed");
+#endif
     if (gMenuArc0 != NULL) {
         Heap_Free(gMenuArc0);
         gMenuArc0 = NULL;
     }
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: menu pack freed");
+#endif
     FirstRun_WaitPartition(2);
+#if defined(PORT_PS3)
+    Port_StageTrace("FirstRun_Main: partition 2 ready");
+#endif
     if (FIRSTRUN_SHOW("skip_intro")) {
+#if defined(PORT_PS3)
+        Port_StageTrace("FirstRun_Main: opening movie");
+#endif
         Movie_PlayOpening();
+#if defined(PORT_PS3)
+        Port_StageTrace("FirstRun_Main: opening movie done");
+#endif
     }
     PadWatch_SetEnabled(1);
     return 1;

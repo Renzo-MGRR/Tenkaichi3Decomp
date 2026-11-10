@@ -24,6 +24,9 @@ s32 Dc_Main(void) {
     done = 0;
     if (gMenuArc8 == NULL) {
         gMenuArc8 = File_LoadSync(gProgress->baseFile + 0xB, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc8);
+        #endif
     }
     do {
         switch (gProgress->mode) {

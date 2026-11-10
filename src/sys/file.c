@@ -44,6 +44,41 @@ extern FileReqQueue gFileReq;
 extern char gFileRootDir[];
 extern char gFileDirName[];
 
+#if defined(PORT_PS3)
+static u32 File_ReadLe32(const u8 *p) {
+    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+}
+
+void File_ConvertPackHeader(void *pack, s32 size) {
+    u8 *p = pack;
+    u32 count, i;
+    if (p == NULL || size < 4) return;
+    count = File_ReadLe32(p);
+    if (count > 4096 || (count + 1) > (u32)size / 4) return;
+    for (i = 0; i <= count; i++) {
+        u32 v = File_ReadLe32(p + i * 4);
+        p[i * 4] = (u8)(v >> 24); p[i * 4 + 1] = (u8)(v >> 16);
+        p[i * 4 + 2] = (u8)(v >> 8); p[i * 4 + 3] = (u8)v;
+    }
+}
+
+/* A raw menu archive starts with its little-endian section table: the section count, one byte offset
+   per section and the end offset. The game reads those words with MPACK_AT, which is a plain u32 load,
+   so make them host order once, right after the file was loaded. */
+void File_FixPackTable(void *pack) {
+    u8 *p = pack;
+    u32 count, i;
+    if (p == NULL) return;
+    count = File_ReadLe32(p);
+    if (count > 64) return; /* not a section table */
+    for (i = 0; i <= count + 1; i++) {
+        u32 v = File_ReadLe32(p + i * 4);
+        p[i * 4] = (u8)(v >> 24); p[i * 4 + 1] = (u8)(v >> 16);
+        p[i * 4 + 2] = (u8)(v >> 8); p[i * 4 + 3] = (u8)v;
+    }
+}
+#endif
+
 /* Unused stub that returns 0. */
 s32 File_Stub264A50(void) {
     return 0;
@@ -70,9 +105,18 @@ void File_AdxErrorCallback(void *obj, char *msg) {
 
 /* Starts loading the directory of AFS partition `pt` without blocking. */
 s32 File_LoadPartitionNw(s32 pt) {
+#if defined(PORT_PS3)
+    /* The legacy table contains 32-bit PS2 pointers. Resolve the native folders
+       explicitly instead of dereferencing those addresses in the PPU process. */
+    static const char *const names[FILE_PT_COUNT] = {
+        "pzs3us0.afs", "pzs3us1.afs", "pzs3us2.afs"
+    };
+    if (pt < 0 || pt >= FILE_PT_COUNT) return -1;
+    return ADXF_LoadPartitionNw(pt, (char *)names[pt], NULL, NULL);
+#else
     AfsPartition *part = &gAfsPartitionTbl[pt];
-
     return ADXF_LoadPartitionNw(pt, part->name, NULL, part->info);
+#endif
 }
 
 /* Returns 1 once the partition directory has been read. */
@@ -102,8 +146,21 @@ void File_WaitPartitionTimeout(s32 pt) {
 
 /* Brings up the whole file layer: CRI, partitions 0 and 1, the request queue. */
 void File_Init(void) {
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    /* These partition names are stored as 32-bit PS2 pointers in the game data table.
+       Pass native PPU string literals to the PS3 AFS-folder backend instead. */
+    Port_StageTrace("File_Init: loading partition 0");
+    ADXF_LoadPartitionNw(0, "pzs3us0.afs", NULL, NULL);
+    Port_StageTrace("File_Init: loading partition 1");
+    ADXF_LoadPartitionNw(1, "pzs3us1.afs", NULL, NULL);
+    Port_StageTrace("File_Init: initializing request queue");
+    File_InitRequests();
+    Port_StageTrace("File_Init: ready");
+#else
     File_InitAdx();
     File_LoadPartition1();
+#endif
 }
 
 /* Sets up the CRI file system and players, loads partition 0 and resets the request queue. */
@@ -272,18 +329,48 @@ void *File_LoadSyncEx(s32 id, char *name, void *buf, s32 unused) {
             adxf = ADXF_Open(name, NULL);
         }
     } while (adxf == NULL);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        Port_StageTracePtr("File_LoadSync: opened", adxf);
+    }
+#endif
 
     sectors = ADXF_GetFsizeSct(adxf);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("File_LoadSync: sectors", sectors);
+    }
+#endif
     dst = buf;
     if (buf == NULL) {
         dst = Heap_Alloc(sectors * FILE_SECTOR_SIZE, 0x40, 0, HEAP_ANY);
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        Port_StageTracePtr("File_LoadSync: buffer", dst);
+    }
+#endif
     while (ADXF_ReadNw(adxf, sectors, dst) != sectors) {
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("File_LoadSync: read done");
+    }
+#endif
     do {
         ADXM_ExecMain();
     } while (ADXF_GetStat(adxf) != ADXF_STAT_READEND);
     ADXF_Close(adxf);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("File_LoadSync: closed");
+    }
+#endif
     buf = dst;
     return buf;
 }

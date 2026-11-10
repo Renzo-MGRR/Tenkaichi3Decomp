@@ -166,10 +166,16 @@ void Save_Stub266600(SaveData *opt) {
 
 /* Allocates the 0x4000-byte save block and fills it with a new save. */
 void Save_Init(void) {
+#if defined(PORT_PS3)
+    gSaveData = Heap_Alloc(SAVE_SIZE, 0x20, 0, 2);
+    if (gSaveData != NULL) memset(gSaveData, 0, SAVE_SIZE);
+    return;
+#else
     gSaveData = Heap_Alloc(SAVE_SIZE, 0x20, 0, 2);
     memset(gSaveData, 0, SAVE_SIZE);
     Save_SetDefaults(gSaveData);
     Save_Stub266600(gSaveData);
+#endif
 }
 
 /* Gives item idx (0-based) if it is not owned yet, marking it new. */

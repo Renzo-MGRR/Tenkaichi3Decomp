@@ -4,39 +4,49 @@
 .globl gTimerLines
 gTimerLines:
     .zero 8
+.p2align 3
 .globl gSndRpc
 gSndRpc:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gSndMgr
 gSndMgr:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gMovieEsBuf
 gMovieEsBuf:
-    .zero 4
+    .zero 8
 .globl gMovieEsSize
 gMovieEsSize:
     .zero 4
+.p2align 3
 .globl gMovieEsWrite
 gMovieEsWrite:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gMovieEsDmaStart
 gMovieEsDmaStart:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gMovieEsDmaEnd
 gMovieEsDmaEnd:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gEftBubble
 gEftBubble:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gEftDust
 gEftDust:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gEftSpdLine
 gEftSpdLine:
-    .zero 4
+    .zero 8
+.p2align 3
 .globl gEftShotFx
 gEftShotFx:
-    .zero 4
+    .zero 8
 .globl D_002FF1B4
 D_002FF1B4:
     .zero 4
@@ -49,9 +59,10 @@ gStgShadow:
 .globl gBtlPause
 gBtlPause:
     .zero 8
+.p2align 3
 .globl gColWalkCtx
 gColWalkCtx:
-    .zero 4
+    .zero 8
 .globl gFontGlyphGap
 gFontGlyphGap:
     .zero 4
@@ -91,9 +102,10 @@ gStgLastTop:
 .globl gStgLastBottom
 gStgLastBottom:
     .zero 4
+.p2align 3
 .globl gStgFx
 gStgFx:
-    .zero 4
+    .zero 8
 .globl gHeapDebugValue
 gHeapDebugValue:
     .zero 4

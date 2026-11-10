@@ -26,6 +26,9 @@
 #include "sys/gfx.h"
 #include "sys/gfxm_d_c.h"
 #include "battle/btl_cam.h"
+#if defined(PORT_PS3)
+#include "../../port/src/port_addr.h"
+#endif
 
 extern void Vec4_Copy(Vec4 *dst, Vec4 *src);
 extern void Vec4_Add(Vec4 *dst, Vec4 *a, Vec4 *b);
@@ -288,11 +291,11 @@ void ObjDraw_UploadTextures(ObjDrawObj *obj) {
             pkt[8] = 0;
             pkt[9] = (((u64)tbp << 32) | ((u64)e->pixBlt << 48)) >> 32;
             Dma_AddData(pkt, 0x30);
-            Dma_AddRef(e->pix, e->pixSize);
+            Dma_AddRef(Port_Ptr(e->pix), e->pixSize);
             pkt[8] = 0;
             pkt[9] = (((u64)cbp << 32) | ((u64)e->clutBlt << 48)) >> 32;
             Dma_AddData(pkt, 0x30);
-            Dma_AddRef(e->clut, e->clutSize);
+            Dma_AddRef(Port_Ptr(e->clut), e->clutSize);
         } else if (i >= first && i < first + count && i == obj->mdl.model->faceTex) {
             face = BtlObj_GetFaceTexture(obj);
             tbp = e->tbpOfs + mdl->model->tbp;
@@ -302,20 +305,20 @@ void ObjDraw_UploadTextures(ObjDrawObj *obj) {
                 pkt[8] = 0;
                 pkt[9] = (((u64)tbp << 32) | ((u64)e->pixBlt << 48)) >> 32;
                 Dma_AddData(pkt, 0x30);
-                Dma_AddRef(e->pix, e->pixSize);
+                Dma_AddRef(Port_Ptr(e->pix), e->pixSize);
                 pkt[8] = 0;
                 pkt[9] = (((u64)cbp << 32) | ((u64)e->clutBlt << 48)) >> 32;
                 Dma_AddData(pkt, 0x30);
-                Dma_AddRef(e->clut, e->clutSize);
+                Dma_AddRef(Port_Ptr(e->clut), e->clutSize);
             } else {
                 pkt[8] = 0;
                 pkt[9] = (((u64)tbp << 32) | ((u64)e->pixBlt << 48)) >> 32;
                 Dma_AddData(pkt, 0x30);
-                Dma_AddRef(e->pix, e->pixSize);
+                Dma_AddRef(Port_Ptr(e->pix), e->pixSize);
                 pkt[8] = 0;
                 pkt[9] = (((u64)cbp << 32) | ((u64)e->clutBlt << 48)) >> 32;
                 Dma_AddData(pkt, 0x30);
-                Dma_AddRef(e->clut, e->clutSize);
+                Dma_AddRef(Port_Ptr(e->clut), e->clutSize);
             }
         }
     }

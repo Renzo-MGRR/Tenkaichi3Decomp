@@ -18,8 +18,10 @@ void BootCard_OnFlowDone(void) {
 
 /* Unpacks the screen (section `section` of archive 0) and starts the dialog and card modules. */
 void BootCard_Init(s32 section) {
-    gBootCard = Heap_Alloc(0x14, 0x20, 0, 2);
-    memset(gBootCard, 0, 0x14);
+    /* sizeof(BootCard) follows the native pointer width on PS3. The old literal
+       0x14 only covered its 32-bit PS2 layout and left the wider tail unallocated. */
+    gBootCard = Heap_Alloc(sizeof(BootCard), 0x20, 0, 2);
+    memset(gBootCard, 0, sizeof(*gBootCard));
     gBootCard->pack = (u32 *)MPACK_AT(gMenuArc0, section);
     gBootCard->res = Sprite_Unpack(gBootCard->pack, NULL, NULL);
     Dialog_Init(MPACK_AT(gBootCard->res, 1), NULL, 0);

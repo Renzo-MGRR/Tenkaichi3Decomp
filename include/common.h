@@ -6,4 +6,10 @@
 
 #define NULL 0
 
+#if defined(PORT_PS3)
+/* gCommonRes is a 32-bit PS2 data symbol. Never store native PPU pointers in that slot. */
+#define gCommonRes Port_CommonRes
+#define gProgress Port_Progress
+#endif
+
 #endif

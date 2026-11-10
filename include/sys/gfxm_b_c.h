@@ -17,6 +17,11 @@ typedef struct FlashTag {
     /* 0x04 */ u32 size;  /* bytes of data after these 8 */
 } FlashTag;
 
+/* Reads the little-endian integer fields stored in PS2 FOD assets. */
+u16 Flash_ReadU16(const u8 *p);
+u32 Flash_ReadU32(const u8 *p);
+void Flash_ReadTag(FlashTag *tag, const u8 *p);
+
 /* 3x3 matrix read from the bit stream: [0] [4] scale, [1] [3] skew, [2] [5] translation, [8] = 1. */
 typedef struct FlashMtx {
     f32 m[9];

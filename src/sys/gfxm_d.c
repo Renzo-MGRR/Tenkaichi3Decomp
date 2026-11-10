@@ -8,6 +8,14 @@
  */
 #include "sys/gfxm_d.h"
 
+#if defined(PORT_PS3)
+#define FLASHD_FN(x) (x)
+#define FLASHD_ARG(x) (x)
+#else
+#define FLASHD_FN(x) ((s32)(x))
+#define FLASHD_ARG(x) ((s32)(x))
+#endif
+
 extern int strcmp(const char *a, const char *b);
 extern void FlashTl_GotoLabel(FlashDTl *tl, char *label, s32 fromStart); /* 0x10BEB8 */
 extern void FlashTl_Advance(FlashDTl *tl, s32 speed, s32 a, s32 freeRun); /* 0x10BC28 */
@@ -51,19 +59,19 @@ void FlashClipList_GotoLabel(FlashDClipList *list, FlashDRef *ref, char *label) 
 }
 
 /* Sets the callback run before the clip is drawn, and its argument. */
-void FlashClipList_SetPreDraw(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 arg) {
+void FlashClipList_SetPreDraw(FlashDClipList *list, FlashDRef *ref, void *fn, void *arg) {
     FlashDClip *clip = &list->items[ref->index];
     s32 n;
     u32 i;
 
-    clip->preDraw = fn;
-    clip->preArg = arg;
+    clip->preDraw = FLASHD_FN(fn);
+    clip->preArg = FLASHD_ARG(arg);
     n = ref->more;
     if (n != 0) {
         for (i = 1; i < list->count - ref->index; i++) {
             if (strcmp(clip[i].name, clip->name) == 0) {
-                clip[i].preDraw = fn;
-                clip[i].preArg = arg;
+                clip[i].preDraw = FLASHD_FN(fn);
+                clip[i].preArg = FLASHD_ARG(arg);
                 n--;
                 if (n == 0) {
                     break;
@@ -74,19 +82,19 @@ void FlashClipList_SetPreDraw(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 
 }
 
 /* Sets the callback run after the clip is drawn, and its argument. */
-void FlashClipList_SetPostDraw(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 arg) {
+void FlashClipList_SetPostDraw(FlashDClipList *list, FlashDRef *ref, void *fn, void *arg) {
     FlashDClip *clip = &list->items[ref->index];
     s32 n;
     u32 i;
 
-    clip->postDraw = fn;
-    clip->postArg = arg;
+    clip->postDraw = FLASHD_FN(fn);
+    clip->postArg = FLASHD_ARG(arg);
     n = ref->more;
     if (n != 0) {
         for (i = 1; i < list->count - ref->index; i++) {
             if (strcmp(clip[i].name, clip->name) == 0) {
-                clip[i].postDraw = fn;
-                clip[i].postArg = arg;
+                clip[i].postDraw = FLASHD_FN(fn);
+                clip[i].postArg = FLASHD_ARG(arg);
                 n--;
                 if (n == 0) {
                     break;
@@ -97,19 +105,19 @@ void FlashClipList_SetPostDraw(FlashDClipList *list, FlashDRef *ref, s32 fn, s32
 }
 
 /* Sets the callback run after the clip's children are drawn, and its argument. */
-void FlashClipList_SetDrawOver(FlashDClipList *list, FlashDRef *ref, s32 fn, s32 arg) {
+void FlashClipList_SetDrawOver(FlashDClipList *list, FlashDRef *ref, void *fn, void *arg) {
     FlashDClip *clip = &list->items[ref->index];
     s32 n;
     u32 i;
 
-    clip->drawOver = fn;
-    clip->overArg = arg;
+    clip->drawOver = FLASHD_FN(fn);
+    clip->overArg = FLASHD_ARG(arg);
     n = ref->more;
     if (n != 0) {
         for (i = 1; i < list->count - ref->index; i++) {
             if (strcmp(clip[i].name, clip->name) == 0) {
-                clip[i].drawOver = fn;
-                clip[i].overArg = arg;
+                clip[i].drawOver = FLASHD_FN(fn);
+                clip[i].overArg = FLASHD_ARG(arg);
                 n--;
                 if (n == 0) {
                     break;

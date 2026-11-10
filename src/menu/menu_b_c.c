@@ -835,6 +835,7 @@ s32 HistOutro_Run(s32 section) {
 #define HIST_LOAD_ARC() \
     if (gMenuArc2 == NULL) { \
         gMenuArc2 = File_LoadSync(gProgress->baseFile + 0xC, NULL, 0); \
+        File_FixPackTable(gMenuArc2); \
     }
 
 /* Progress modes 6..10, the story mode, and mode 3, its ending movie. Returns 1 to start the battle that

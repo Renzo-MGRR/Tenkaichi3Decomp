@@ -627,6 +627,9 @@ s32 PortScreen_Main(void) {
     gPortScreen = PORT_SCREEN_NONE;
     if (gMenuArc5 == NULL) {
         gMenuArc5 = File_LoadSync(gProgress->baseFile, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc5);
+        #endif
     }
     switch (screen) {
     case PORT_SCREEN_TBO:

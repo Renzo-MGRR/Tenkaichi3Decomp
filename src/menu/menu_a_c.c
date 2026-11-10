@@ -56,13 +56,34 @@ void Title_Idle(s32 *result) {
 void Title_Init(s32 section) {
     MTexRes *res = NULL;
 
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: enter");
+    }
+#endif
     if (gMenuArc1 == NULL) {
         gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc1);
+        #endif
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: arc1");
+    }
+#endif
     gTitle = Heap_Alloc(0xD0, 0x20, 0, 2);
     memset(gTitle, 0, 0xD0);
     gTitle->pack = (u32 *)MPACK_AT(gMenuArc1, section);
     gTitle->res = Sprite_Unpack(gTitle->pack, NULL, NULL);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: unpacked");
+    }
+#endif
     TT_RES(1);
     gTitle->bg = res;
     TT_RES(2);
@@ -103,6 +124,12 @@ void Title_Init(s32 section) {
     Flash_Play(&gTitle->flash[0], 1);
     Dialog_Init(MPACK_AT(gTitle->res, 12), NULL, 0);
     McFlow_Init(1);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: dialog+mcflow done");
+    }
+#endif
     if (gProgress->flags & MPROG_SAVE_LOADED) {
         gTitle->itemCount = 2;
         gTitle->cursor = 1;
@@ -326,8 +353,17 @@ extern int Port_NetFixedStart(void); /* port/src/gs/net.c */
 s32 Title_Run(s32 section) {
     s32 result = 1;
     s32 wait = 0;
+#if defined(PORT_PS3)
+    s32 traceFrames = 0;
+#endif
 
     Title_Init(section);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Run: init done");
+    }
+#endif
     ColorFade_StartIn(0, 0, 0, 0x14);
 #ifdef PORT
     /* A setting of the PC version (F1, UI): the copyright page, a still held for 300 frames that no button
@@ -350,6 +386,13 @@ s32 Title_Run(s32 section) {
 #endif
         ColorFade_Draw();
         Gfx_EndFrame(1);
+#if defined(PORT_PS3)
+        if (traceFrames < 4) {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Title_Run: fade loop frame", traceFrames);
+            traceFrames++;
+        }
+#endif
         Dma_Flush();
         File_Stub264D90();
         if (gProgress->flags & MPROG_FREEZE) {
@@ -384,6 +427,13 @@ s32 Title_Run(s32 section) {
         gTitle->mcState = McFlow_Update();
         ColorFade_Draw();
         Gfx_EndFrame(1);
+#if defined(PORT_PS3)
+        if (traceFrames < 8) {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Title_Run: main loop frame", traceFrames);
+            traceFrames++;
+        }
+#endif
         Dma_Flush();
         File_Stub264D90();
         if (gProgress->flags & MPROG_FREEZE) {

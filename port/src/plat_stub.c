@@ -96,8 +96,12 @@ int Port_VBlankUsLeft(void) {
 /* How far behind its grid the game is, in microseconds: the coming vertical blank was due that long ago (0: it
    is not due yet, or there is no grid). For gs/gs_draw.c, which leaves pictures out when the machine is behind. */
 int Port_PaceBehindUs(void) {
+#if defined(PORT_PS3)
+    return 0; /* the PS3 port presents every frame; the pace grid is not aligned to real time here */
+#else
     unsigned long long t = now_ns();
     return sPaceNext != 0 && t > sPaceNext && t - sPaceNext < 100000000ull ? (int)((t - sPaceNext) / 1000ull) : 0;
+#endif
 }
 
 /* The game's pace, 1000 = its own. Online it is the match's and nothing else (gs/net.c: 1000 or 1200, the same on
@@ -197,6 +201,15 @@ static void win_no_throttling(void) {
 #endif
 
 static void vblank_wait(void) {
+#if defined(PORT_PS3)
+    {
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 16666666L;
+        nanosleep(&ts, NULL);
+    }
+    return;
+#endif
     struct timespec ts;
     unsigned long long t = now_ns(), after;
 

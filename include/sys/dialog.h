@@ -16,12 +16,21 @@
  * large), fl_on_start / fl_off_start / fl_ok (choice plates).
  */
 
-/* The animation object as far as this module reads it (owned by the 0x10D4F0 library). */
+/* The animation object as far as this module reads it (owned by the 0x10D4F0 library).
+   Mirrors Flash (gfxm_c.h) so the dialog's buffer matches the layout the Flash_* functions expect,
+   even in the 8-byte-pointer PS3 build. */
 typedef struct DialogFlash {
-    /* 0x00 */ s32 unk0[2];
-    /* 0x08 */ s32 flags; /* bit 1 (2): window fully open (choices usable); bit 3 (8): close animation finished */
-    /* 0x0C */ s32 unkC[8];
-} DialogFlash; /* size 0x2C */
+    /* 0x00 */ u8 *data;
+    /* 0x08 */ void **tex;
+    /* 0x10 */ u32 flags; /* bit 1 (2): window fully open (choices usable); bit 3 (8): close animation finished */
+    /* 0x14 */ u32 trig;
+    /* 0x18 */ u32 se;
+    /* 0x1C */ s32 speed;
+    /* 0x20 */ s32 ofs[2];
+    /* 0x28 */ void *root;
+    /* 0x30 */ void *clips;
+    /* 0x38 */ void *shapes;
+} DialogFlash; /* size matches Flash */
 
 /* Result of Flash_FindLabel: a clip / label handle, id < 0 when not found. */
 typedef struct DialogFlashRef {

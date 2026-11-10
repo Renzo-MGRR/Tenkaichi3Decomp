@@ -35,12 +35,18 @@ extern int Port_MenuFeather(const char *name, int top, int *width);
 extern int Port_MenuPart(int part);
 #endif
 #include "sys/gfxm_b_b.h"
+#if defined(PORT_PS3)
+#include "../../port/src/port_addr.h"
+#endif
 
 extern void *memcpy(void *dst, const void *src, u32 size);
 extern void *memset(void *dst, s32 c, u32 n);
 extern s32 strcmp(const char *a, const char *b);
 extern u32 strlen(const char *s);
 extern s32 atoi(const char *s);
+#if defined(PORT_PS3)
+static u32 sDbgAdv, sDbgShapeDraw, sDbgQuadDraw, sDbgQuadSkipA, sDbgQuadSkipTex;
+#endif
 
 void FlashTl_TagPlace(FlashTl *tl, u8 *data, s32 *ofs);
 void FlashTl_TagPlace2(FlashTl *tl, u8 *data, s32 *ofs);
@@ -113,7 +119,7 @@ void FlashTl_RunFrame(FlashTl *tl, u8 *frame) {
     }
     while (frame[ofs++] != 0) {
     }
-    memcpy(&size, frame + ofs, 2);
+    size = Flash_ReadU16(frame + ofs);
     ofs += 2;
     if (size == 0) {
     end:
@@ -124,7 +130,7 @@ void FlashTl_RunFrame(FlashTl *tl, u8 *frame) {
         return;
     }
     do {
-        memcpy(&code, frame + ofs, 2);
+        code = Flash_ReadU16(frame + ofs);
         ofs += 2;
         switch (code) {
         case 4:
@@ -156,11 +162,11 @@ void FlashTl_TagPlace(FlashTl *tl, u8 *data, s32 *ofs) {
     u16 id;
     u8 kind;
 
-    memcpy(&depth, data + *ofs, 2);
+    depth = Flash_ReadU16(data + *ofs);
     *ofs += 2;
     kind = data[*ofs];
     *ofs += 1;
-    memcpy(&id, data + *ofs, 2);
+    id = Flash_ReadU16(data + *ofs);
     *ofs += 2;
     switch (kind) {
     case 4:
@@ -193,12 +199,12 @@ void FlashTl_TagPlace2(FlashTl *tl, u8 *data, s32 *ofs) {
     Flash_CxformIdentity(&cx);
     flags = data[*ofs];
     *ofs += 1;
-    memcpy(&depth, data + *ofs, 2);
+    depth = Flash_ReadU16(data + *ofs);
     *ofs += 2;
     if (flags & 2) {
         kind = data[*ofs];
         *ofs += 1;
-        memcpy(&id, data + *ofs, 2);
+        id = Flash_ReadU16(data + *ofs);
         *ofs += 2;
         if (flags & 4) {
             Flash_ReadMtx(data, &mtx, ofs);
@@ -240,11 +246,11 @@ void FlashTl_TagRemove(FlashTl *tl, u8 *data, s32 *ofs) {
     u8 kind;
     FlashSlot *slot;
 
-    memcpy(&depth, data + *ofs, 2);
+    depth = Flash_ReadU16(data + *ofs);
     *ofs += 2;
     kind = data[*ofs];
     *ofs += 1;
-    memcpy(&id, data + *ofs, 2);
+    id = Flash_ReadU16(data + *ofs);
     *ofs += 2;
     slot = &tl->slots[depth - 1];
     switch (kind) {
@@ -267,7 +273,7 @@ void FlashTl_TagRemove(FlashTl *tl, u8 *data, s32 *ofs) {
 void FlashTl_TagRemove2(FlashTl *tl, u8 *data, s32 *ofs) {
     u16 depth;
 
-    memcpy(&depth, data + *ofs, 2);
+    depth = Flash_ReadU16(data + *ofs);
     *ofs += 2;
     FlashSlot_Clear(&tl->slots[depth - 1]);
 }
@@ -356,7 +362,7 @@ void FlashTl_TagActions(FlashTl *tl, u8 *data, s32 *ofs) {
         case 0x81: {
             u16 frame;
 
-            memcpy(&frame, data + *ofs, 2);
+            frame = Flash_ReadU16(data + *ofs);
             *ofs += 2;
             cur->frame = frame - 1;
             cur->state |= FLASH_TL_GOTO;
@@ -425,16 +431,17 @@ void FlashTl_TagActions(FlashTl *tl, u8 *data, s32 *ofs) {
 void FlashTl_Init(FlashTl *tl, u8 *record, Flash *owner) {
     FlashTag hdr;
 
-    memset(&hdr, 0, sizeof(hdr));
     memset(tl, 0, sizeof(FlashTl));
-    memcpy(&hdr, record, sizeof(hdr));
+    Flash_ReadTag(&hdr, record);
     record += 8;
     tl->owner = owner;
     tl->depths = hdr.count;
     tl->frames = record;
     if (tl->slots == NULL) {
-        tl->slots = Heap_Alloc(tl->depths * 8, 0x20, 0, 2);
-        memset(tl->slots, 0, tl->depths * 8);
+        /* FlashSlot holds two pointers; its PS3 size is 16 bytes, not the
+           original PS2 32-bit-pointer size of 8 bytes. */
+        tl->slots = Heap_Alloc(tl->depths * sizeof(*tl->slots), 0x20, 0, 2);
+        memset(tl->slots, 0, tl->depths * sizeof(*tl->slots));
     }
 }
 
@@ -815,24 +822,66 @@ f32 FlashDraw_AdjustY(f32 y) {
    it (+0x40), and returns the TEX0 value. Entry `index` holds the CLUT; when it has no pixels of its own the
    pixels are entry 0's (several palettes for one picture). */
 u64 FlashDraw_UploadTex(FlashTex *tex, s32 index, s32 tbp) {
-    TexBltPacket pkt = { { 0x10000002, 0, 0, 0x50000002 }, { 0x1000000000008001, 0xE }, 0, 0x50 };
+    /* Same layout as the port's other packet builders: 32-bit words in PS2 little-endian order, which
+       Dma_AddData converts to the CELL's native 64-bit fields. (A native-u64 struct would be swapped and the
+       GIF tag would decode with NLOOP 0, so no upload ever happened.) */
+    u32 pkt[12] = { DMA_TAG_CNT | 2, 0, VIF_FLUSHE, VIF_DIRECT | 2,
+                    GIF_EOP | 1, 0x10000000, GIF_REG_AD, 0, 0, 0, 0x50, 0 };
     TexEntry *clut = (TexEntry *)((index << 6) + (u32)tex);
     TexEntry *pix;
     s64 base = tbp;
     u64 tex0;
+    u64 bitblt;
+#if defined(PORT_PS3)
+    {
+        static u32 dn;
+        if (dn < 8) {
+            char b[256];
+            u32 *pw;
+            snprintf(b, sizeof(b), "FLASHUPL %u idx=%d tbp=%x pixSize=%x pixOfs=%x pixBlt=%x pix=%08x",
+                     (unsigned)dn, (int)index, (unsigned)tbp, (unsigned)clut->pixSize, (unsigned)clut->pixOfs,
+                     (unsigned)clut->pixBlt, (unsigned)clut->pix);
+            { extern void Port_StageTrace(const char *what); Port_StageTrace(b); }
+            pw = clut->pix != 0 ? (u32 *)Port_Ptr(clut->pix) : NULL;
+            if (pw != NULL) {
+                snprintf(b, sizeof(b), "FLASHUPL pix words %08x %08x %08x %08x | clutSize=%x clut=%08x w %08x %08x %08x %08x",
+                         (unsigned)pw[0], (unsigned)pw[1], (unsigned)pw[2], (unsigned)pw[3],
+                         (unsigned)clut->clutSize, (unsigned)clut->clut,
+                         clut->clut ? (unsigned)((u32 *)Port_Ptr(clut->clut))[0] : 0u,
+                         clut->clut ? (unsigned)((u32 *)Port_Ptr(clut->clut))[1] : 0u,
+                         clut->clut ? (unsigned)((u32 *)Port_Ptr(clut->clut))[2] : 0u,
+                         clut->clut ? (unsigned)((u32 *)Port_Ptr(clut->clut))[3] : 0u);
+                { extern void Port_StageTrace(const char *what); Port_StageTrace(b); }
+            }
+            dn++;
+        }
+    }
+#endif
 
     if (clut->pixSize == 0) {
         index = 0;
     }
     pix = (TexEntry *)((index << 6) + (u32)tex);
-    pkt.bitbltbuf = (base << 32) | ((u64)pix->pixBlt << 48);
-    Dma_AddData(&pkt, sizeof(pkt));
-    Dma_AddRef(pix->pix, pix->pixSize);
+    bitblt = (base << 32) | ((u64)pix->pixBlt << 48);
+    pkt[8] = (u32)bitblt;
+    pkt[9] = (u32)(bitblt >> 32);
+    Dma_AddData(pkt, sizeof(pkt));
+#if defined(PORT_PS3)
+    Dma_AddRefLe(Port_Ptr(pix->pix), pix->pixSize);
+#else
+    Dma_AddRef(Port_Ptr(pix->pix), pix->pixSize);
+#endif
     tbp += pix->tbpStep;
     tbp += 0x40;
-    pkt.bitbltbuf = ((s64)tbp << 32) | ((u64)clut->clutBlt << 48);
-    Dma_AddData(&pkt, sizeof(pkt));
-    Dma_AddRef(clut->clut, clut->clutSize);
+    bitblt = ((s64)tbp << 32) | ((u64)clut->clutBlt << 48);
+    pkt[8] = (u32)bitblt;
+    pkt[9] = (u32)(bitblt >> 32);
+    Dma_AddData(pkt, sizeof(pkt));
+#if defined(PORT_PS3)
+    Dma_AddRefLe(Port_Ptr(clut->clut), clut->clutSize);
+#else
+    Dma_AddRef(Port_Ptr(clut->clut), clut->clutSize);
+#endif
     tex0 = pix->tex0;
     tex0 |= (s64)tbp << 37;
     tex0 |= base;
@@ -1077,7 +1126,13 @@ void FlashDraw_Quad(FlashTex *tex, FlashQuad *q) {
     u64 tex0;
     u64 *p;
 
+#if defined(PORT_PS3)
+    sDbgQuadDraw++;
+#endif
     if (q->rgba[3] == 0) {
+#if defined(PORT_PS3)
+        sDbgQuadSkipA++;
+#endif
         return;
     }
 #ifdef PORT
@@ -1369,6 +1424,9 @@ void Flash_Advance(Flash *flash) {
     s32 *speed = &flash->speed;
     u32 *flags;
 
+#if defined(PORT_PS3)
+    sDbgAdv++;
+#endif
     flash->trig = 0;
     flash->se = 0;
     flash->flags &= ~FLASH_END;
@@ -1380,7 +1438,37 @@ void Flash_Advance(Flash *flash) {
 
 /* Draws the movie (after the default drawing environment) unless it is hidden. */
 void Flash_Draw(Flash *flash) {
+    { extern void Port_StageTrace(const char *what); char _b[128]; snprintf(_b, sizeof(_b), "Flash_Draw called flash=%p depths=%d", (void*)flash, flash&&flash->root?flash->root->depths:0); Port_StageTrace(_b); }
     Gfx_AddDefaultEnv();
+#if defined(PORT_PS3)
+    {
+        static u32 dc;
+        dc++;
+        if (dc <= 3 || dc % 5 == 0) {
+            FlashTl *tl = flash->root;
+            int i, shapes = 0, clips = 0, vis = 0;
+            char b[192];
+            if (tl != NULL) {
+                for (i = 0; i < tl->depths; i++) {
+                    if (tl->slots[i].shape != NULL) {
+                        shapes++;
+                    }
+                    if (tl->slots[i].clip != NULL) {
+                        clips++;
+                        if (tl->slots[i].clip->flags & FLASH_CLIP_VISIBLE) {
+                            vis++;
+                        }
+                    }
+                }
+            }
+            snprintf(b, sizeof(b), "FLASHDRAW %u flags=%x depths=%d shapes=%d clips=%d vis=%d frame=%u adv=%u sdraw=%u qdraw=%u qskipA=%u qskipTex=%u",
+                     (unsigned)dc, (unsigned)flash->flags, tl != NULL ? (int)tl->depths : 0, shapes, clips, vis,
+                     tl != NULL ? (unsigned)tl->frame : 0, (unsigned)sDbgAdv, (unsigned)sDbgShapeDraw,
+                     (unsigned)sDbgQuadDraw, (unsigned)sDbgQuadSkipA, (unsigned)sDbgQuadSkipTex);
+            { extern void Port_StageTrace(const char *what); Port_StageTrace(b); }
+        }
+    }
+#endif
     if (!(flash->flags & FLASH_HIDE)) {
 #ifdef PORT
         /* widescreen menus: a versus select's roster, all of it (its cells' mask too), moved to have its bar in the
@@ -1691,26 +1779,65 @@ void FlashShape_Draw(FlashShape *shape, FlashProp *prop, Flash *flash) {
     FlashQuad *pq;
 
     data = Flash_GetRecord(flash->data, 4, shape->id);
-    memcpy(&count, data + 8, 2);
+#if defined(PORT_PS3)
+    sDbgShapeDraw++;
+#endif
+    count = Flash_ReadU16(data + 8);
+#if defined(PORT_PS3)
+    {
+        static u32 sd;
+        if (sd < 6) {
+            char b[160];
+            snprintf(b, sizeof(b), "FSHAPE id=%u count=%u tex=%p data=%p", (unsigned)shape->id, (unsigned)count,
+                     (void *)flash->tex, (void *)data);
+            { extern void Port_StageTrace(const char *what); Port_StageTrace(b); }
+        }
+        sd++;
+    }
+#endif
     for (i = 0; i < count; i++) {
         FlashQuad *pm = &quad;
+        u8 *r = data + 10 + i * sizeof(rec);
 
         pq = pm;
         tex = NULL;
         memset(pm, 0, sizeof(quad));
         memset(&rec, 0, sizeof(rec));
-        memcpy(&rec, data + 10 + i * sizeof(rec), sizeof(rec));
+        /* (the record is PS2 little-endian data: read it field by field, not with a raw struct copy) */
+        rec.image = (s16)Flash_ReadU16(r);
+        rec.unk02 = Flash_ReadU16(r + 2);
+        rec.rgba = Flash_ReadU32(r + 4);
+        rec.x0 = (s32)Flash_ReadU32(r + 8);
+        rec.x1 = (s32)Flash_ReadU32(r + 12);
+        rec.y0 = (s32)Flash_ReadU32(r + 16);
+        rec.y1 = (s32)Flash_ReadU32(r + 20);
+#if defined(PORT_PS3)
+        {
+            static u32 qd;
+            if (qd < 24) {
+                char b[192];
+                snprintf(b, sizeof(b), "FQUAD i=%u img=%d rgba=%08x xy=%d,%d..%d,%d tex=%p alt=%d",
+                         (unsigned)i, (int)rec.image, (unsigned)rec.rgba, (int)rec.x0, (int)rec.y0, (int)rec.x1, (int)rec.y1,
+                         (rec.image >= 0 && rec.image < 16) ? (void *)flash->tex[rec.image] : (void *)0, (int)rec.unk02);
+                { extern void Port_StageTrace(const char *what); Port_StageTrace(b); }
+                qd++;
+            }
+        }
+#endif
         if (rec.image >= 0) {
             img = Flash_GetRecord(flash->data, 3, rec.image);
             tex = flash->tex[rec.image];
             if (tex == NULL) {
+#if defined(PORT_PS3)
+                sDbgQuadSkipTex++;
+#endif
                 continue;
             }
             quad.uv.v0 = 0;
             quad.uv.u0 = 0;
             quad.uv.tex = 0;
-            memcpy(&w, img + 8, 2);
-            memcpy(&h, img + 10, 2);
+            w = Flash_ReadU16(img + 8);
+            h = Flash_ReadU16(img + 10);
             quad.uv.u1 = w;
             quad.uv.v1 = h;
         }
@@ -1744,7 +1871,7 @@ void FlashClipList_Init(FlashClipList *list, Flash *flash) {
     if (tag == NULL) {
         return;
     }
-    memcpy(&hdr, tag, sizeof(hdr));
+    Flash_ReadTag(&hdr, tag);
     if (list->items == NULL) {
         list->items = Heap_Alloc(hdr.count * sizeof(FlashClip), 0x20, 0, 2);
         memset(list->items, 0, hdr.count * sizeof(FlashClip));
@@ -1754,7 +1881,7 @@ void FlashClipList_Init(FlashClipList *list, Flash *flash) {
         clip = &list->items[i];
         clip->index = i;
         rec = Flash_SkipRecords(tag, clip->index);
-        memcpy(&clip->id, rec + 8, 2);
+        clip->id = Flash_ReadU16(rec + 8);
         clip->flags = 0;
         memset(&clip->prop, 0, sizeof(FlashProp));
         Flash_MtxIdentity(&clip->prop.mtx);

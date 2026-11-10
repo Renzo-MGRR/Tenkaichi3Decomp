@@ -11,6 +11,12 @@
 extern void *memset(void *dst, s32 c, u32 n);
 extern void *memcpy(void *dst, const void *src, u32 n);
 
+#if defined(PORT_PS3)
+extern void Port_StageTrace(const char *what);
+extern void Port_StageTracePtr(const char *what, const void *ptr);
+extern void Port_StageTraceInt(const char *what, long value);
+#endif
+
 /* libmpeg */
 extern s32 sceMpegInit(void);
 extern s32 sceMpegCreate(sceMpeg *mp, u8 *work, s32 size);
@@ -60,8 +66,14 @@ extern volatile u32 *Port_DmaChcr(s32 channel);
 #else
 #define D4_CHCR ((volatile u32 *)0x1000B400)
 #endif
+#if defined(PORT_PS3)
+extern volatile u32 *Port_DmaReg(u32 addr);
+#define D4_MADR (Port_DmaReg(0x1000B410))
+#define D4_QWC (Port_DmaReg(0x1000B420))
+#else
 #define D4_MADR ((volatile u32 *)0x1000B410)
 #define D4_QWC ((volatile u32 *)0x1000B420)
+#endif
 
 #ifdef PORT
 #define UNCACHED(p) ((void *)(p)) /* no uncached mirror of memory on PC */
@@ -191,12 +203,21 @@ void Movie_Open(char *pss, char *adx) {
     Movie *m;
     MovieBuf *buf;
     s32 i;
+#if defined(PORT_PS3)
+    Port_StageTrace("Movie_Open: enter");
+#endif
 
     do {
         adxf = ADXF_Open(pss, NULL);
     } while (adxf == NULL);
+#if defined(PORT_PS3)
+    Port_StageTracePtr("Movie_Open: adxf", adxf);
+#endif
     Adx_PlayFilePaused(ADX_CH_BGM, adx, 0x40, 0);
     gMovie = Heap_Alloc(sizeof(Movie), 0x20, 0, 2);
+#if defined(PORT_PS3)
+    Port_StageTracePtr("Movie_Open: struct", gMovie);
+#endif
     memset(gMovie, 0, sizeof(Movie));
     m = gMovie;
     m->adxf = adxf;
@@ -213,6 +234,13 @@ void Movie_Open(char *pss, char *adx) {
     for (i = 0, buf = m->buf; i < MOVIE_BUF_COUNT; i++, buf++) {
         buf->data = Heap_Alloc(MOVIE_BUF_SIZE, 0x40, 0, 2);
     }
+#if defined(PORT_PS3)
+    Port_StageTracePtr("Movie_Open: rgb", m->rgb);
+    Port_StageTracePtr("Movie_Open: tags0", m->tags[0]);
+    Port_StageTracePtr("Movie_Open: work", m->work);
+    Port_StageTracePtr("Movie_Open: es", m->es);
+    Port_StageTracePtr("Movie_Open: buf0", m->buf[0].data);
+#endif
     sceMpegCreate(&m->mpeg, m->work, m->workSize);
     sceMpegAddStrCallback(&m->mpeg, SCE_MPEG_STR_M2V, 0, (sceMpegCallback)Movie_CbVideoData, NULL);
     sceMpegAddCallback(&m->mpeg, SCE_MPEG_CB_NODATA, Movie_CbNoData, NULL);
@@ -220,6 +248,9 @@ void Movie_Open(char *pss, char *adx) {
     sceMpegAddCallback(&m->mpeg, SCE_MPEG_CB_ERROR, Movie_CbError, NULL);
     MovieTag_BuildImage(m->tags[0], m->rgb, 0, 0, MOVIE_WIDTH, MOVIE_HEIGHT);
     MovieTag_BuildImage(m->tags[1], m->rgb, 0, MOVIE_HEIGHT, MOVIE_WIDTH, MOVIE_HEIGHT);
+#if defined(PORT_PS3)
+    Port_StageTrace("Movie_Open: done");
+#endif
 }
 
 /* Stops the sound, deletes the decoder, closes the file and frees everything Movie_Open allocated. */
@@ -277,6 +308,10 @@ void Movie_Run(void) {
     sceMpeg *mp;
     s32 wait = 0;
     s32 skip = 0;
+#if defined(PORT_PS3)
+    s32 traceFrame = 0;
+    Port_StageTrace("Movie_Run: begin");
+#endif
 
     gMovieRunCount++;
     m = gMovie;
@@ -295,6 +330,9 @@ void Movie_Run(void) {
     m->audioOn = 1;
     Adx_Resume(ADX_CH_BGM);
     while (!sceMpegIsEnd(mp)) {
+#if defined(PORT_PS3)
+        if ((traceFrame % 30) == 0) { Port_StageTraceInt("Movie_Run: frame", traceFrame); }
+#endif
         Timer_Reset(0);
         Gfx_BeginFrame();
         Pad_Update();
@@ -309,7 +347,13 @@ void Movie_Run(void) {
             Fade_Start(0, FADE_OUT, 0.5f);
             skip = 1;
         }
+#if defined(PORT_PS3)
+        if (traceFrame == 0) { Port_StageTrace("Movie_Run: first GetPicture"); }
+#endif
         sceMpegGetPicture(mp, m->rgb, MOVIE_MB_COUNT);
+#if defined(PORT_PS3)
+        if (traceFrame == 0) { Port_StageTrace("Movie_Run: first GetPicture done"); }
+#endif
         sceGsSyncPath(0, 0);
         MovieTag_Send(gGfx.field ? m->tags[0] : m->tags[1]);
         sceGsSyncPath(0, 0);
@@ -323,7 +367,13 @@ void Movie_Run(void) {
             }
         } while (Movie_FindBuf(0) != NULL);
         Gfx_EndFrame(2);
+#if defined(PORT_PS3)
+        traceFrame++;
+#endif
     }
+#if defined(PORT_PS3)
+    Port_StageTraceInt("Movie_Run: end, frames", traceFrame);
+#endif
     Adx_Stop(ADX_CH_BGM);
     Fade_Start(0, FADE_OUT, 0.0f);
     Gfx_BeginFrame();

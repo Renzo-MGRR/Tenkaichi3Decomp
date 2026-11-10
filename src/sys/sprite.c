@@ -8,7 +8,16 @@ extern void TexFile_UploadOne(SpriteRes *res, s32 index, s32 tbp, s32 cbp); /* u
 
 /* Unpacks a BPE-compressed sprite sheet. */
 void *Sprite_Unpack(void *src, void *dst, s32 *rawSize) {
+#if defined(PORT_PS3)
+    s32 size;
+    void *out = Bpe_Decode(src, dst, &size);
+    extern void File_ConvertPackHeader(void *pack, s32 size);
+    File_ConvertPackHeader(out, size);
+    if (rawSize != NULL) *rawSize = size;
+    return out;
+#else
     return Bpe_Decode(src, dst, rawSize);
+#endif
 }
 
 /* Converts a screen Y; the identity in this build. */

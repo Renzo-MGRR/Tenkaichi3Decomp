@@ -226,7 +226,7 @@ static void kick(uint32_t addr) {
             break;
         }
     }
-    Gs_Gif(buf, len / 16);
+    Gs_Gif(buf, len / 16, 0);
 }
 
 #define DEST(n) ((dest >> (3 - (n))) & 1) /* field order in the instruction: x y z w */
@@ -516,7 +516,7 @@ static int hle_program0(void) {
     for (layer = 0; layer < 2; layer++) {
         memcpy(pkt, &vu.mem[top * 16], 16);
         memcpy(pkt + 16, &vu.mem[(top + 1 + (uint32_t)layer) * 16], 16);
-        Gs_Gif(pkt, 2); /* the layer's TEX0 */
+        Gs_Gif(pkt, 2, 0); /* the layer's TEX0 */
         memcpy(tag, &vu.mem[(top + 3 + (uint32_t)layer) * 16], 16);
         Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF); /* PRIM from the tag */
         GsGpu_DrawVu0(layer, (int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 5) * 16], count, (const float *)vu.mem);
@@ -547,7 +547,7 @@ static int hle_program1(void) {
     for (layer = 0; layer < 2; layer++) {
         memcpy(pkt, &vu.mem[top * 16], 16);
         memcpy(pkt + 16, layer == 0 ? &vu.mem[(top + 1) * 16] : &vu.mem[26 * 16], 16);
-        Gs_Gif(pkt, 2); /* the layer's TEX0 */
+        Gs_Gif(pkt, 2, 0); /* the layer's TEX0 */
         memcpy(tag, &vu.mem[(top + 3 + (uint32_t)layer) * 16], 16);
         Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF); /* PRIM from the tag */
         GsGpu_DrawVu0(layer == 0 ? 0 : 5, (int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 5) * 16], count, (const float *)vu.mem);
@@ -571,7 +571,7 @@ static int hle_program4(void) {
     if (count < 3 || top + 3 + count * 3 > 1024) {
         return 0;
     }
-    Gs_Gif(&vu.mem[top * 16], 2);
+    Gs_Gif(&vu.mem[top * 16], 2, 0);
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF);
     GsGpu_DrawVu4((int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 3) * 16], count, (const float *)vu.mem);
     sStatKicks++;
@@ -599,7 +599,7 @@ static int hle_program2(void) {
     memcpy(&consts[0], &vu.mem[0], 10 * 16);          /* bones and pivots: as in program 0 */
     memcpy(&consts[56], &vu.mem[11 * 16], 4 * 16);    /* screen matrix: program 0 has it at 14..17 */
     memcpy(&consts[88], &vu.mem[10 * 16], 16);        /* colour: program 0's layer 0 colour at 22 */
-    Gs_Gif(&vu.mem[top * 16], 2);
+    Gs_Gif(&vu.mem[top * 16], 2, 0);
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF); /* PRIM from the tag */
     /* the context is the one of the PRIM in force, not the tag's: the shadow passes run with PRMODECONT.AC = 0,
        where the attributes (texturing, blending, context) come from PRMODE and the tag only gives the type */
@@ -637,7 +637,7 @@ static int hle_program78(int layer) {
         memcpy(&consts[56], &vu.mem[4 * 16], 4 * 16);   /* screen matrix */
         memcpy(&consts[91], &vu.mem[12 * 16 + 12], 4);  /* the mesh's alpha */
     }
-    Gs_Gif(&vu.mem[top * 16], 2);
+    Gs_Gif(&vu.mem[top * 16], 2, 0);
     Gs_RegWrite(0, (tag[0] >> 47) & 0x7FF);
     GsGpu_DrawVu0(layer, (int)((tag[0] >> 56) & 1), (const float *)&vu.mem[(top + 3) * 16], count, consts);
     sStatKicks++;

@@ -1096,6 +1096,9 @@ s32 Tour_Main(void) {
             if (gMenuArc4 == NULL) {
                 if (load) {
                     gMenuArc4 = File_LoadSync(gProgress->baseFile + 2, NULL, 0);
+#if defined(PORT_PS3)
+                    File_FixPackTable(gMenuArc4);
+#endif
                 }
             }
             Bgm_Play(0x10B19);
@@ -1113,6 +1116,9 @@ s32 Tour_Main(void) {
             if (gMenuArc4 == NULL) {
                 if (load) {
                     gMenuArc4 = File_LoadSync(gProgress->baseFile + 2, NULL, 0);
+#if defined(PORT_PS3)
+                    File_FixPackTable(gMenuArc4);
+#endif
                 }
             }
             Bgm_Play(0x10B1B);

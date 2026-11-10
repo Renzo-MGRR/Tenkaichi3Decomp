@@ -82,15 +82,30 @@ static const char *alias_target(const char *rel) {
 
 static PortFile *open_rel(const char *rel) {
     PortFile *f;
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    extern void Port_StageTraceInt(const char *what, long value);
+    extern void Port_StageTracePtr(const char *what, const void *ptr);
+    Port_StageTrace("open_rel: enter");
+#endif
     long size = Port_FileSize(rel); /* (says so itself when the file is missing) */
+#if defined(PORT_PS3)
+    Port_StageTraceInt("open_rel: size", size);
+#endif
 
     if (size < 0) {
         return NULL;
     }
     f = Port_LowAlloc(sizeof(PortFile)); /* the game keeps the handle in a 4-byte pointer */
+#if defined(PORT_PS3)
+    Port_StageTracePtr("open_rel: handle", f);
+#endif
     snprintf(f->rel, sizeof(f->rel), "%s", rel);
     f->sizeSct = (int32_t)((size + SECTOR - 1) / SECTOR);
     f->stat = STAT_STOP;
+#if defined(PORT_PS3)
+    Port_StageTrace("open_rel: done");
+#endif
     return f;
 }
 
@@ -124,8 +139,10 @@ int Port_FilePath(int ptid, int flid, const char *fname, char *out, int size) {
             snprintf(rel, sizeof(rel), "%s", a);
         }
     }
+#if !defined(PORT_PS3)
     snprintf(out, (size_t)size, "%s/mods/%s", root(), rel);
     fp = fopen(out, "rb");
+#endif
     if (fp == NULL) {
         snprintf(out, (size_t)size, "%s/%s", root(), rel);
         fp = fopen(out, "rb");
@@ -158,7 +175,11 @@ int ADXF_LoadPartitionNw(int ptid, char *fname, void *dir, void *ptinfo) {
 }
 
 int ADXF_GetPtStat(int ptid) {
+#if defined(PORT_PS3)
+    return STAT_READEND;
+#else
     return sPartDir[ptid & 7][0] != '\0' ? STAT_READEND : STAT_STOP;
+#endif
 }
 
 void *ADXF_OpenAfs(int ptid, int flid) {

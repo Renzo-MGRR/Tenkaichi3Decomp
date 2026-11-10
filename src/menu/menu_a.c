@@ -112,6 +112,9 @@ void MainMenu_Init(s32 section) {
 
     if (gMenuArc1 == NULL) {
         gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc1);
+        #endif
     }
 #ifdef PORT
     gMainMenu = Heap_Alloc(sizeof(MainMenu), 0x20, 0, 2); /* (its item list is longer on the PC: MAINMENU_ITEM_MAX) */

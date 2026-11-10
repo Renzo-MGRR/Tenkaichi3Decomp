@@ -18,6 +18,9 @@ s32 OptMode_Main(void) {
 
     if (gMenuArc10 == NULL) {
         gMenuArc10 = File_LoadSync(gProgress->baseFile + 5, NULL, 0);
+        #if defined(PORT_PS3)
+        File_FixPackTable(gMenuArc10);
+        #endif
     }
     do {
         switch (gProgress->mode) {

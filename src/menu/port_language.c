@@ -148,6 +148,22 @@ static void PortLanguage_Draw(s32 choice, s32 count, s32 selectionFrames) {
 
 /* Runs before BootCard_Run: the language is saved before the memory card is read. */
 void PortLanguage_Run(void) {
+#if defined(PORT_PS3)
+    {
+        /* Catalog discovery can perform desktop-only extraction and then waits for a
+           controller choice. Resolve the first-boot default before that scan so the
+           game can reach its memory-card screen on hardware and in RPCS3. */
+        char saved[16] = {0};
+        Port_SettingText("menu_lang", "", saved, sizeof(saved));
+        if (saved[0] == 0) {
+            memcpy(saved, "en", 3);
+            MenuTranslation_SaveChoice(saved);
+        }
+        MenuText_BootLanguageChosen();
+        Ui_LanguageChosen(saved);
+    }
+    return;
+#endif
     s32 count = MenuTranslation_Available(sLanguage, LANGUAGE_MAX);
     s32 choice = 0, selected = 0, selectionFrames = 0;
     s32 i;

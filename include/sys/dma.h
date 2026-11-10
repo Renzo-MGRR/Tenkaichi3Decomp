@@ -73,6 +73,32 @@ typedef unsigned int u128 __attribute__((mode(TI)));
 #ifdef PORT
 extern volatile u32 *Port_DmaChcr(s32 channel);
 #endif
+#if defined(PORT_PS3)
+/* PS3: the register window at 0x10000000 is not mapped; the game addresses are backed by BSS
+   (port/src/port_addr.h). Translate every access before dereferencing. */
+extern volatile u32 *Port_DmaReg(u32 addr);
+#define VIF1_STAT (Port_DmaReg(0x10003C00))
+#define GIF_STAT (Port_DmaReg(0x10003020))
+#define D1_QWC (Port_DmaReg(0x10009020))
+#define D1_TADR (Port_DmaReg(0x10009030))
+#define D2_MADR (Port_DmaReg(0x1000A010))
+#define D2_QWC (Port_DmaReg(0x1000A020))
+#define D2_TADR (Port_DmaReg(0x1000A030))
+#define D_CTRL (Port_DmaReg(0x1000E000))
+#define D_STAT (Port_DmaReg(0x1000E010))
+#define D_PCR (Port_DmaReg(0x1000E020))
+#else
+#define VIF1_STAT ((volatile u32 *)0x10003C00)
+#define GIF_STAT ((volatile u32 *)0x10003020)
+#define D1_QWC ((volatile u32 *)0x10009020)
+#define D1_TADR ((volatile u32 *)0x10009030)
+#define D2_MADR ((volatile u32 *)0x1000A010)
+#define D2_QWC ((volatile u32 *)0x1000A020)
+#define D2_TADR ((volatile u32 *)0x1000A030)
+#define D_CTRL ((volatile u32 *)0x1000E000)
+#define D_STAT ((volatile u32 *)0x1000E010)
+#define D_PCR ((volatile u32 *)0x1000E020)
+#endif
 /* What goes into a DMA address register: the physical address on the PS2 (28 bits); on PC the pointer itself
    (a PC stack or global address does not fit in 28 bits). */
 #ifdef PORT
@@ -80,26 +106,16 @@ extern volatile u32 *Port_DmaChcr(s32 channel);
 #else
 #define DMA_PHYS(a) ((a) & 0x0FFFFFFF)
 #endif
-#define VIF1_STAT ((volatile u32 *)0x10003C00)
-#define GIF_STAT ((volatile u32 *)0x10003020)
 #ifdef PORT /* PC build: every access first completes a transfer that was started (port/src/plat_gs.c) */
 #define D1_CHCR Port_DmaChcr(1)
 #else
 #define D1_CHCR ((volatile u32 *)0x10009000)
 #endif
-#define D1_QWC ((volatile u32 *)0x10009020)
-#define D1_TADR ((volatile u32 *)0x10009030)
 #ifdef PORT /* PC build: every access first completes a transfer that was started (port/src/plat_gs.c) */
 #define D2_CHCR Port_DmaChcr(2)
 #else
 #define D2_CHCR ((volatile u32 *)0x1000A000)
 #endif
-#define D2_MADR ((volatile u32 *)0x1000A010)
-#define D2_QWC ((volatile u32 *)0x1000A020)
-#define D2_TADR ((volatile u32 *)0x1000A030)
-#define D_CTRL ((volatile u32 *)0x1000E000)
-#define D_STAT ((volatile u32 *)0x1000E010)
-#define D_PCR ((volatile u32 *)0x1000E020)
 
 /* One quadword of GS packet data seen as a whole, as two doublewords or as four words. */
 typedef union GsQword {
@@ -119,6 +135,11 @@ typedef struct SifDmaData {
 void Dma_InitBuffers(void);
 void Dma_AddData(void *src, s32 size);
 void Dma_AddRef(void *addr, s32 size);
+/* Same, but the referenced block is a little-endian PS2 packet read straight from a game file (textures, fonts):
+   its VIF codes and GIF fields are converted on the way to the GS. Nothing that was built by the game at run time
+   (or swapped from the PS2 program image) may use this. */
+void Dma_AddRefLe(void *addr, s32 size);
+#define DMA_REF_LE_MARKER 0x4C454946u /* 'LEIF', recognized by chain_block in port/src/gs/gs_core.c */
 void Dma_AddNext(void *addr, u32 *retTag);
 void Dma_Flush(void);
 void *Dma_Alloc(s32 size);

@@ -368,10 +368,22 @@ int UiText_Load(const char *gameTextDir, const char *locale) {
     __atomic_store_n(&sReady, 1, __ATOMIC_RELEASE);
     return 1;
 }
+#if defined(PORT_PS3)
+/* PS2 text is UTF-16 little-endian; the PS3 reads u16 natively (big-endian). Convert a BOM-marked string
+   to host order the first time it is used. Swapping turns the BOM into 0xfeff, so this is idempotent. */
+static void ui_text_to_host(uint16_t *s) {
+    size_t i;
+    if (s == NULL || s[0] != 0xfffe) return;
+    for (i = 0; s[i] != 0; i++) s[i] = (uint16_t)((s[i] >> 8) | (s[i] << 8));
+}
+#else
+#define ui_text_to_host(s) ((void)0)
+#endif
 const uint16_t *UiText_TranslateString(const uint16_t *original) {
     uint64_t h;
     unsigned slot;
     UiWord *w;
+    ui_text_to_host((uint16_t *)original);
     if (!__atomic_load_n(&sReady, __ATOMIC_ACQUIRE) || !original || *original != 0xfeff) return original;
     if (sOwnCount && bsearch(&original, sOwn, (size_t)sOwnCount, sizeof(*sOwn), ui_ptr_compare)) return original;
     h = ui_hash_line(UINT64_C(1469598103934665603), original);
@@ -381,18 +393,30 @@ const uint16_t *UiText_TranslateString(const uint16_t *original) {
     w = &sWords[slot];
     return w->original && !w->ambiguous && w->translated ? w->translated : original;
 }
+/* The disc's text tables hold little-endian offsets even though the PS2 stored its own numbers big-endian
+   (the data is PC-authored); the PS3 host has to swap them back. */
+static uint32_t ui_table_u32(const uint32_t *table, uint32_t index) {
+#if defined(PORT_PS3)
+    const uint8_t *p = (const uint8_t *)table + index * 4;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+#else
+    return table[index];
+#endif
+}
 const uint16_t *UiText_TranslateLine(const uint32_t *table, int line, const uint16_t *original) {
     uint32_t count, i;
     uint64_t h;
     const uint16_t *candidate = NULL;
     int found = 0;
+    ui_text_to_host((uint16_t *)original);
     if (!__atomic_load_n(&sReady, __ATOMIC_ACQUIRE) || !table || line < 0 || !original) return original;
-    count = table[0];
+    count = ui_table_u32(table, 0);
     if (count == 0 || count > UI_MAX_LINE || (uint32_t)line >= count) return UiText_TranslateString(original);
     h = ui_hash_char(UINT64_C(1469598103934665603), (uint16_t)count);
     h = ui_hash_char(h, (uint16_t)(count >> 16));
     for (i = 0; i < count; i++) {
-        const uint16_t *s = (const uint16_t *)((const uint8_t *)table + (table[i + 1] & ~3u));
+        const uint16_t *s = (const uint16_t *)((const uint8_t *)table + (ui_table_u32(table, i + 1) & ~3u));
+        ui_text_to_host((uint16_t *)s);
         if (!(h = ui_hash_line(h, s))) return UiText_TranslateString(original);
     }
     for (i = 0; i < (uint32_t)sGroupCount; i++) {

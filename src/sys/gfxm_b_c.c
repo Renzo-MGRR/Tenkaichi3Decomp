@@ -12,6 +12,33 @@ extern void *memset(void *dst, s32 c, u32 n);
 extern s32 strcmp(const char *a, const char *b);
 extern u32 strlen(const char *s);
 
+u16 Flash_ReadU16(const u8 *p) {
+#if defined(PORT_PS3)
+    return (u16)((u16)p[0] | (u16)p[1] << 8);
+#else
+    u16 value;
+    memcpy(&value, p, sizeof(value));
+    return value;
+#endif
+}
+
+u32 Flash_ReadU32(const u8 *p) {
+#if defined(PORT_PS3)
+    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+#else
+    u32 value;
+    memcpy(&value, p, sizeof(value));
+    return value;
+#endif
+}
+
+void Flash_ReadTag(FlashTag *tag, const u8 *p) {
+    tag->code = p[0];
+    tag->unk01 = p[1];
+    tag->count = Flash_ReadU16(p + 2);
+    tag->size = Flash_ReadU32(p + 4);
+}
+
 /* True when the data starts with 'F' 'O' 'D' 0x11 "LIT". */
 s32 Flash_CheckHeader(u8 *data) {
     FlashHeader hdr;
@@ -36,8 +63,7 @@ u8 *Flash_FindTag(u8 *data, u8 code) {
     FlashTag tag;
 
     do {
-        memset(&tag, 0, sizeof(tag));
-        memcpy(&tag, data + ofs, sizeof(tag));
+        Flash_ReadTag(&tag, data + ofs);
         if (tag.code == code) {
             found = data + ofs;
             break;
@@ -53,13 +79,11 @@ u8 *Flash_SkipRecords(u8 *tag, u16 count) {
     FlashTag rec;
     s32 n = count;
 
-    memset(&hdr, 0, sizeof(hdr));
-    memcpy(&hdr, tag, sizeof(hdr));
+    Flash_ReadTag(&hdr, tag);
     tag += 8;
     while (n != 0) {
-        memset(&rec, 0, sizeof(rec));
         n--;
-        memcpy(&rec, tag, sizeof(rec));
+        Flash_ReadTag(&rec, tag);
         tag += 8;
         tag += rec.size;
     }
@@ -77,7 +101,7 @@ s32 Flash_GetRecordCount(u8 *data, u8 code) {
     u8 *tag = Flash_FindTag(data, code);
 
     if (tag != NULL) {
-        count = ((FlashTag *)tag)->count;
+        count = Flash_ReadU16(tag + 2);
     }
     return count;
 }
@@ -91,7 +115,7 @@ u8 *Flash_SkipNamed(u8 *p, u32 count) {
     for (i = 0; i < count; i++) {
         while (p[ofs++] != 0) {
         }
-        memcpy(&size, p + ofs, 2);
+        size = Flash_ReadU16(p + ofs);
         ofs += 2;
         if (size != 0) {
             ofs += size;
@@ -117,7 +141,7 @@ s32 Flash_FindName(u8 *p, char *name) {
             return i;
         }
         i++;
-        memcpy(&size, p + ofs, 2);
+        size = Flash_ReadU16(p + ofs);
         ofs += 2;
     } while (size != 0);
     return -1;

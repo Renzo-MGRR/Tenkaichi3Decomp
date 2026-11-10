@@ -182,7 +182,11 @@ int Port_NetActive(void);
 static uint32_t sOpts[2]; /* by player: 0 = not known */
 
 static uint32_t own_options(void) {
+#if defined(PORT_PS3)
+    const char *root = getenv("BT3_SAVES") != NULL ? getenv("BT3_SAVES") : "/dev_hdd0/game/BT3P00001/USRDIR/saves";
+#else
     const char *root = getenv("BT3_SAVES") != NULL ? getenv("BT3_SAVES") : "saves";
+#endif
     const char *carried = getenv("BT3_NET_OPTS"); /* (across the restart into the session: the save folder is the session's by then) */
     char path[600];
     unsigned char w[8];
@@ -2241,7 +2245,11 @@ int Port_NetActive(void);
    online match starts from an empty save on both sides, so both compute with the default; this choice is kept
    aside for what this copy plays (BT3_NET_VOICE=alt; snd_adx.c, snd_se.c). 1 = the second set. */
 static int own_voice_alt(void) {
+#if defined(PORT_PS3)
+    const char *root = getenv("BT3_SAVES") != NULL ? getenv("BT3_SAVES") : "/dev_hdd0/game/BT3P00001/USRDIR/saves";
+#else
     const char *root = getenv("BT3_SAVES") != NULL ? getenv("BT3_SAVES") : "saves";
+#endif
     char path[600];
     unsigned char w[4];
     FILE *fp;

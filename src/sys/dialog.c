@@ -6,6 +6,10 @@
 extern int gPortMenuMode;                 /* headless.c: the menus are running */
 extern void Port_MenuPage(int screen); /* port/src/gs_marker.c: widescreen menus */
 #endif
+#if defined(PORT_PS3)
+#include "../../port/src/port_addr.h"
+extern void Port_StageTrace(const char *what);
+#endif
 
 typedef struct DialogProgress {
     /* 0x00 */ u8 unk0[0x14];
@@ -61,8 +65,25 @@ extern const u16 *UiText_TranslateLine(const u32 *table, int line, const u16 *or
 #define DIALOG_TRANSLATE(tbl, i, str) (str)
 #endif
 
-#define DIALOG_TEXT(tbl, i) ((u16 *)((u8 *)(tbl) + ((tbl)[(i) + 1] / 4 * 4)))
+#if defined(PORT_PS3)
+static u32 Dialog_ReadLe32(const u8 *p) {
+    return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
+}
+static DialogResHdr *Dialog_Part(u32 *file, u32 i) {
+    u32 ofs = Dialog_ReadLe32((const u8 *)file + i * 4);
+    return (DialogResHdr *)((u8 *)file + (ofs & ~3u));
+}
+/* The text table's offsets are little-endian like the rest of the file data. */
+static u16 *Dialog_TextAt(const u32 *tbl, s32 i) {
+    u32 ofs = Dialog_ReadLe32((const u8 *)tbl + (u32)(i + 1) * 4);
+    return (u16 *)((u8 *)tbl + (ofs & ~3u));
+}
+#define DIALOG_PART(file, i) Dialog_Part((u32 *)(file), (i))
+#define DIALOG_TEXT(tbl, i) Dialog_TextAt((const u32 *)(tbl), (i))
+#else
 #define DIALOG_PART(file, i) ((DialogResHdr *)((u8 *)(file) + ((file)[i] / 4 * 4)))
+#define DIALOG_TEXT(tbl, i) ((u16 *)((u8 *)(tbl) + ((tbl)[(i) + 1] / 4 * 4)))
+#endif
 
 /* Layout 0: prints text msgIdx of the caller's table, centred on the anchor clip and shifted down by its line count. */
 void Dialog_DrawText(void) {
@@ -185,21 +206,54 @@ void Dialog_DrawBody(void) {
     u16 *str;
     f32 alpha;
     f32 scale;
+#if defined(PORT_PS3)
+    static s32 sBodyLog;
+#endif
 
     if (gDialog->titleTbl == NULL) {
+#if defined(PORT_PS3)
+        if (sBodyLog < 4) {
+            Port_StageTrace("DBODY: no title table");
+            sBodyLog++;
+        }
+#endif
         return;
     }
     if (gDialog->msgIdx < 0) {
+#if defined(PORT_PS3)
+        if (sBodyLog < 4) {
+            Port_StageTrace("DBODY: no message");
+            sBodyLog++;
+        }
+#endif
         return;
     }
     flash = gDialog->flash;
     Flash_FindLabel(flash, NULL, "mc_dummy_text_3", &ref);
     if (ref.id < 0) {
+#if defined(PORT_PS3)
+        if (sBodyLog < 4) {
+            Port_StageTrace("DBODY: no anchor mc_dummy_text_3");
+            sBodyLog++;
+        }
+#endif
         return;
     }
     Flash_ClipGetPos(flash, &ref, &x, &y);
     alpha = Flash_ClipGetAlpha(flash, &ref);
     str = DIALOG_TRANSLATE(gDialog->titleTbl, gDialog->msgIdx, DIALOG_TEXT(gDialog->titleTbl, gDialog->msgIdx));
+#if defined(PORT_PS3)
+    if (sBodyLog < 12) {
+        char b[224];
+        sprintf(b, "DBODY n=%d idx=%d ref=%d xy=%d,%d a=%d lines=%d str=%08x w=%04x %04x %04x %04x",
+                (int)sBodyLog, (int)gDialog->msgIdx, (int)ref.id, (int)x, (int)y,
+                (int)(alpha * 128.0f), (int)Font_CountLines(str), (unsigned)Port_Addr(str),
+                str != NULL ? str[0] : 0, str != NULL ? str[1] : 0,
+                str != NULL ? str[2] : 0, str != NULL ? str[3] : 0);
+        Port_StageTrace(b);
+        sBodyLog++;
+    }
+#endif
     switch (Font_CountLines(str)) {
     case 1:
         y += 0x28;
@@ -246,7 +300,6 @@ void Dialog_PlayCursorPlate(s32 flash, const char *label) {
 /* Allocates the window and builds its animation from the resource file; msgTbl is the caller's text table. */
 void Dialog_Init(u32 *file, u32 *msgTbl, s32 size) {
     DialogResHdr *hdr = NULL;
-
     gDialog = Heap_Alloc(sizeof(Dialog), 0x20, 0, 2);
     memset(gDialog, 0, sizeof(Dialog));
     hdr = DIALOG_PART(file, 1);
@@ -293,7 +346,17 @@ void Dialog_Draw(s32 visible) {
     char name[64];
     DialogFlash *flash;
     s32 i;
+#if defined(PORT_PS3)
+    static int sLoggedVisible;
+#endif
 
+#if defined(PORT_PS3)
+    if (visible && !sLoggedVisible) {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Dialog_Draw: first visible frame");
+        sLoggedVisible = 1;
+    }
+#endif
     Flash_Advance(gDialog->flash);
     if ((gDialog->flags & DIALOG_FLAG_CLOSING) && (gDialog->flash[0].flags & 8)) {
         gDialog->flags |= DIALOG_FLAG_CLOSED;

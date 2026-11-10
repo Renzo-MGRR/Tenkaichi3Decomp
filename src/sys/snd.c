@@ -359,6 +359,18 @@ s32 Snd_ScalePitch(s32 pitch) {
 void Snd_SetupBank(SndBank *bank, u32 mask, SndBankFile *file, s32 alloc) {
     s32 size;
 
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTrace("Snd_SetupBank: enter");
+        Port_StageTraceInt("Snd_SetupBank: bodyOfs", (long)file->bodyOfs);
+        Port_StageTraceInt("Snd_SetupBank: hdOfs", (long)file->hdOfs);
+        Port_StageTraceInt("Snd_SetupBank: seqOfs", (long)file->seqOfs);
+        Port_StageTraceInt("Snd_SetupBank: endOfs", (long)file->endOfs);
+    }
+#endif
+
     bank->bodySize = file->hdOfs - file->bodyOfs;
     bank->body = (u32 *)file + file->bodyOfs / 4;
     bank->hdSize = file->seqOfs - file->hdOfs;
@@ -377,7 +389,19 @@ void Snd_SetupBank(SndBank *bank, u32 mask, SndBankFile *file, s32 alloc) {
                 break;
         }
         bank->spuSize = size;
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Snd_SetupBank: spu alloc size", size);
+        }
+#endif
         bank->spuAddr = SpuHeap_Alloc(size);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Snd_SetupBank: spuAddr", (long)bank->spuAddr);
+        }
+#endif
 
         size = file->seqOfs - file->hdOfs;
         switch (mask) {
@@ -390,7 +414,19 @@ void Snd_SetupBank(SndBank *bank, u32 mask, SndBankFile *file, s32 alloc) {
                 break;
         }
         bank->hdIopSize = size;
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Snd_SetupBank: hd alloc size", size);
+        }
+#endif
         bank->hdIop = IopHeap_Alloc(size);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTracePtr(const char *what, const void *ptr);
+            Port_StageTracePtr("Snd_SetupBank: hdIop", bank->hdIop);
+        }
+#endif
 
         size = file->endOfs - file->seqOfs;
         switch (mask) {
@@ -403,20 +439,65 @@ void Snd_SetupBank(SndBank *bank, u32 mask, SndBankFile *file, s32 alloc) {
                 break;
         }
         bank->seqIopSize = size;
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Snd_SetupBank: seq alloc size", size);
+        }
+#endif
         bank->seqIop = IopHeap_Alloc(size);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTracePtr(const char *what, const void *ptr);
+            Port_StageTracePtr("Snd_SetupBank: seqIop", bank->seqIop);
+        }
+#endif
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Snd_SetupBank: header parse");
+    }
+#endif
     bank->vagMax = SndHd_GetVagMax(file);
     SndHd_GetLoopBits(file, bank->loopBits);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Snd_SetupBank: done");
+    }
+#endif
 }
 
 /* Copies a bank to the IOP: header and third section at once; the samples now (sync) or later from Snd_Update. */
 void Snd_SendBank(SndBank *bank, s32 sync) {
+#if defined(PORT_PS3)
+    extern void Port_StageTraceInt(const char *what, long value);
+    Port_StageTraceInt("Snd_SendBank: hdSize", bank->hdSize);
+#endif
     Dma_SendToIop(bank->hdIop, bank->hd, bank->hdSize);
+#if defined(PORT_PS3)
+    extern void Port_StageTraceInt(const char *what, long value);
+    Port_StageTraceInt("Snd_SendBank: seqSize", bank->seqSize);
+#endif
     Dma_SendToIop(bank->seqIop, bank->seq, bank->seqSize);
     if (sync) {
+#if defined(PORT_PS3)
+        Port_StageTraceInt("Snd_SendBank: bodySize", bank->bodySize);
+#endif
         Dma_SendToIop(gSndMgr->iopBuf, bank->body, bank->bodySize);
+#if defined(PORT_PS3)
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Snd_SendBank: body staged, spu transfer");
+#endif
         Snd_SpuTransfer(gSndMgr->iopBuf, bank->spuAddr, bank->bodySize);
+#if defined(PORT_PS3)
+        Port_StageTrace("Snd_SendBank: spu transfer done, wait");
+#endif
         Snd_SpuTransferWait();
+#if defined(PORT_PS3)
+        Port_StageTrace("Snd_SendBank: wait done");
+#endif
     } else {
         bank->uploading = 0;
         bank->pending = 1;
@@ -425,6 +506,32 @@ void Snd_SendBank(SndBank *bank, s32 sync) {
 
 /* Allocates the manager and the IOP staging buffer, starts libsdr and the RPC link, sets full volume. */
 void Snd_Init(void) {
+#if defined(PORT_PS3)
+    /* The menu still loads sound banks (Snd_LoadBankFile) even though this backend only plays placeholder
+       audio, so the bank manager's bookkeeping must exist: the SPU address heap, the IOP staging buffer and
+       the RPC reply block. Without them SpuHeap_Alloc walks an empty table into NULL. */
+    gSndMgr = Heap_Alloc(sizeof(SndMgr), 0x20, 0, 2);
+    if (gSndMgr != NULL) {
+        memset(gSndMgr, 0, sizeof(SndMgr));
+        gSndMgr->iopBuf = IopHeap_Alloc(0xA4800);
+    }
+    SpuHeap_Init();
+    gSndRpc = Heap_Alloc(sizeof(SndRpc), 0x20, 0, 2);
+    if (gSndRpc != NULL) {
+        memset(gSndRpc, 0, sizeof(SndRpc));
+    }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        Port_StageTracePtr("Snd_Init: gSndMgr", gSndMgr);
+        Port_StageTracePtr("Snd_Init: iopBuf", gSndMgr != NULL ? gSndMgr->iopBuf : NULL);
+        Port_StageTracePtr("Snd_Init: gSndRpc", gSndRpc);
+    }
+#endif
+    extern int Port_AudioInit(void);
+    Port_AudioInit();
+    return;
+#else
     gSndMgr = Heap_Alloc(sizeof(SndMgr), 0x20, 0, 2);
     memset(gSndMgr, 0, sizeof(SndMgr));
     gSndMgr->iopBuf = IopHeap_Alloc(0xA4800);
@@ -433,6 +540,7 @@ void Snd_Init(void) {
     func_00296B48(5);
     Snd_RpcInit();
     Snd_SetMasterVolume(0x7F);
+#endif
 }
 
 /* Shuts the driver down and frees everything. No callers. (The loop unloads only empty slots, i.e. nothing.) */
@@ -467,6 +575,9 @@ void Snd_Reset(void) {
 
 /* Per frame: sends the tick and the queued commands, then moves the deferred sample uploads along, one bank at a time. */
 void Snd_Update(void) {
+#if defined(PORT_PS3)
+    return;
+#else
     SndBank *bank;
     s32 busy = 0;
     s32 i;
@@ -496,14 +607,93 @@ void Snd_Update(void) {
             }
         }
     }
+#endif
 }
+
+#if defined(PORT_PS3)
+/* The bank files are PS2 little-endian data, like the rest of the disc. The CELL is big-endian, so the
+   header fields the game reads natively must be swapped when they arrive. Only the fields this code (and the
+   driver's bank description) looks at are touched: the five words of the file header, the HD header's offset
+   to its vag-info chunk, and the vag-info table itself (maxNumber, the offsets, and the loop flags). */
+static u32 Snd_BankSwap32(u32 v) {
+    return (v >> 24) | ((v >> 8) & 0x0000FF00u) | ((v << 8) & 0x00FF0000u) | (v << 24);
+}
+
+static u16 Snd_BankSwap16(u16 v) {
+    return (u16)((v >> 8) | (v << 8));
+}
+
+static void Snd_BankFixEndian(SndBankFile *file) {
+    u8 *base = (u8 *)file;
+    u32 *head;
+    SndVagInfoChunk *chunk;
+    SndVagParam *param;
+    u32 end;
+    u32 hdOfs;
+    u32 i, n;
+
+    file->unk00 = Snd_BankSwap32(file->unk00);
+    file->bodyOfs = Snd_BankSwap32(file->bodyOfs);
+    file->hdOfs = Snd_BankSwap32(file->hdOfs);
+    file->seqOfs = Snd_BankSwap32(file->seqOfs);
+    file->endOfs = Snd_BankSwap32(file->endOfs);
+
+    end = file->endOfs;
+    hdOfs = file->hdOfs;
+    if (hdOfs > end || end - hdOfs < 0x34) {
+        return;
+    }
+    head = (u32 *)(base + hdOfs);
+    head[0xC] = Snd_BankSwap32(head[0xC]);
+    if (head[0xC] > end - hdOfs || end - hdOfs - head[0xC] < 0x10) {
+        return;
+    }
+    chunk = (SndVagInfoChunk *)(base + hdOfs + head[0xC]);
+    chunk->maxNumber = Snd_BankSwap32(chunk->maxNumber);
+    n = chunk->maxNumber;
+    if (n >= SND_VAG_MAX) {
+        n = SND_VAG_MAX - 1;
+        chunk->maxNumber = n;
+    }
+    for (i = 0; i <= n; i++) {
+        chunk->offset[i] = Snd_BankSwap32(chunk->offset[i]);
+    }
+    param = (SndVagParam *)&chunk->offset[n + 1];
+    for (i = 0; i <= n; i++) {
+        param[i].vagOffset = Snd_BankSwap32(param[i].vagOffset);
+        param[i].sampleRate = Snd_BankSwap16(param[i].sampleRate);
+    }
+}
+#endif
 
 /* Loads a bank file into the slot named by mask (nothing happens when the slot is in use). sync = upload the samples before returning. */
 void Snd_LoadBank(u32 mask, SndBankFile *file, s32 sync) {
-    s32 idx = Snd_BankIndex(mask);
+    s32 idx;
     SndBank *bank;
 
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        Port_StageTrace("Snd_LoadBank: enter");
+        Port_StageTracePtr("Snd_LoadBank: mgr", gSndMgr);
+        Port_StageTracePtr("Snd_LoadBank: file", file);
+    }
+#endif
+    idx = Snd_BankIndex(mask);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("Snd_LoadBank: idx", idx);
+    }
+#endif
     if (!Snd_IsBankLoaded(mask)) {
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTrace(const char *what);
+            Port_StageTrace("Snd_LoadBank: slot free");
+        }
+#endif
         bank = &gSndMgr->bank[idx];
         if (bank->pending) {
             if (bank->uploading) {
@@ -513,8 +703,26 @@ void Snd_LoadBank(u32 mask, SndBankFile *file, s32 sync) {
             bank->uploading = 0;
         }
         Snd_SetupBank(bank, mask, file, 1);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTrace(const char *what);
+            Port_StageTrace("Snd_LoadBank: setup done, sending");
+        }
+#endif
         Snd_SendBank(bank, sync);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTrace(const char *what);
+            Port_StageTrace("Snd_LoadBank: send done, rpc");
+        }
+#endif
         Snd_RpcSetBank(mask, bank->spuAddr, bank->hdIop, bank->seqIop);
+#if defined(PORT_PS3)
+        {
+            extern void Port_StageTrace(const char *what);
+            Port_StageTrace("Snd_LoadBank: rpc done");
+        }
+#endif
     }
 }
 
@@ -553,9 +761,25 @@ void Snd_ReloadBank(u32 mask, SndBankFile *file, s32 sync) {
 
 /* Reads bank file `fileId` from the archive, loads it synchronously and frees the file. */
 void Snd_LoadBankFile(u32 mask, s32 fileId) {
-    void *data = File_LoadSync(fileId, NULL, 0);
+    void *data;
+#if defined(PORT_PS3)
+    extern void Port_StageTrace(const char *what);
+    extern void Port_StageTracePtr(const char *what, const void *ptr);
+    Port_StageTrace("Snd_LoadBankFile: File_LoadSync enter");
+#endif
+    data = File_LoadSync(fileId, NULL, 0);
+#if defined(PORT_PS3)
+    Port_StageTracePtr("Snd_LoadBankFile: File_LoadSync done", data);
+    if (data != NULL) {
+        Snd_BankFixEndian((SndBankFile *)data);
+        Port_StageTrace("Snd_LoadBankFile: bank header fixed");
+    }
+#endif
 
     Snd_LoadBank(mask, data, 1);
+#if defined(PORT_PS3)
+    Port_StageTrace("Snd_LoadBankFile: Snd_LoadBank done");
+#endif
     Heap_Free(data);
 }
 
@@ -634,6 +858,12 @@ s32 Snd_PlaySe(u32 mask, s32 id) {
 /* Plays sample `id` of a bank: volume 0..0x7F (before the bank and option scaling), pan -0x40..0x3F, pitch in 1/64 octave.
    Returns the voice handle, or -1 when the bank is missing, still uploading or muted, or the queue is full. */
 s32 Snd_PlaySeEx(u32 mask, s32 id, s32 volume, s32 pan, s32 pitch) {
+#if defined(PORT_PS3)
+    (void)mask; (void)volume; (void)pan; (void)pitch;
+    extern void Port_AudioPlayBeep(int id);
+    Port_AudioPlayBeep(id);
+    return 0;
+#else
     s32 idx = Snd_BankIndex(mask);
     s32 side;
 
@@ -665,6 +895,8 @@ play:
     }
 #endif
     return Snd_QueuePlay(mask, id, volume, pan, pitch, Snd_IsLoopSe(mask, id));
+
+#endif
 }
 
 /* Stops every voice playing sample `id` of a loaded bank. No callers. */
