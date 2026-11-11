@@ -49,12 +49,27 @@ static u32 File_ReadLe32(const u8 *p) {
     return (u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24;
 }
 
+/* A pack starts with [section count][one byte offset per section], the table padded so that section 0
+   starts on a 64-byte boundary. A single-texture file (the BPE output of a face or menu picture) starts
+   with [texture count][entry table offset in words] instead: count 1, entOfs 8. Swapping that header as
+   if it were a pack turns entOfs 8 into 0x08000000 and the relocation reads a bogus entry pointer.
+   The alignment word is the reliable discriminator (packs seen: count 1/3/8/9/10/14 -> 64, 28 -> 128,
+   40 -> 192; a texture's 8 never matches), and the offsets must stay inside the decoded file. */
 void File_ConvertPackHeader(void *pack, s32 size) {
     u8 *p = pack;
-    u32 count, i;
-    if (p == NULL || size < 4) return;
+    u32 count, table, i, prev;
+    if (p == NULL || size < 8) return;
     count = File_ReadLe32(p);
-    if (count > 4096 || (count + 1) > (u32)size / 4) return;
+    if (count == 0 || count > 64) return;
+    table = (count + 1) * 4;
+    if (table > (u32)size) return;
+    if (File_ReadLe32(p + 4) != ((table + 63) & ~63u)) return;
+    prev = 0;
+    for (i = 1; i <= count; i++) {
+        u32 v = File_ReadLe32(p + i * 4);
+        if (v < prev || v > (u32)size) return;
+        prev = v;
+    }
     for (i = 0; i <= count; i++) {
         u32 v = File_ReadLe32(p + i * 4);
         p[i * 4] = (u8)(v >> 24); p[i * 4 + 1] = (u8)(v >> 16);
@@ -75,6 +90,22 @@ void File_FixPackTable(void *pack) {
         u32 v = File_ReadLe32(p + i * 4);
         p[i * 4] = (u8)(v >> 24); p[i * 4 + 1] = (u8)(v >> 16);
         p[i * 4 + 2] = (u8)(v >> 8); p[i * 4 + 3] = (u8)v;
+    }
+}
+
+/* The tables inside a pack (for example the ModeMenuDescr records of a sub menu's section 6) are little-endian
+   like the disc. The game reads them as native s32, so swap the words once after unpacking. */
+void File_SwapWordsLe(void *start, void *end) {
+    u8 *p = start;
+    u8 *e = end;
+    if (p == NULL || e == NULL) return;
+    while (p + 4 <= e) {
+        u8 b0 = p[0], b1 = p[1], b2 = p[2], b3 = p[3];
+        p[0] = b3;
+        p[1] = b2;
+        p[2] = b1;
+        p[3] = b0;
+        p += 4;
     }
 }
 #endif

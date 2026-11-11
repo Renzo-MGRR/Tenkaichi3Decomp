@@ -21,8 +21,8 @@ Logo *gLogo = NULL; /* 0x3B590C */
 void Logo_Init(u32 *pack, s32 section, s32 frames) {
     MTexRes *res = NULL;
 
-    gLogo = Heap_Alloc(0x24, 0x20, 0, 2);
-    memset(gLogo, 0, 0x24);
+    gLogo = Heap_Alloc(sizeof(*gLogo), 0x20, 0, 2);
+    memset(gLogo, 0, sizeof(*gLogo));
     res = (MTexRes *)MPACK_AT(pack, section);
     Res_RelocateOffsets(&res, res, res);
     gLogo->pic = res;

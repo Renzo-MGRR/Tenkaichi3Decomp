@@ -13,8 +13,14 @@
 
 /* Local view of the 0x7FC-byte progress block: only the control configuration is used. */
 typedef struct BtlTextProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers before the tail (see battle/view_a.h): 0x800, not 0x7F4. */
+    /* 0x000 */ u8 unk0[0x800];
+    /* 0x800 */ s32 controlType;
+#else
     /* 0x000 */ u8 unk0[0x7F4];
     /* 0x7F4 */ s32 controlType;
+#endif
 } BtlTextProgress;
 
 extern BtlTextProgress *gProgress;

@@ -48,9 +48,25 @@ void Title_Idle(s32 *result) {
     }
 }
 
+#if defined(PORT_PS3)
+#define TT_RES(n) \
+    res = (MTexRes *)MPACK_AT(gTitle->res, n); \
+    { \
+        extern void Port_StageTraceInt(const char *what, long value); \
+        extern void Port_StageTracePtr(const char *what, const void *ptr); \
+        Port_StageTraceInt("TT_RES: n", (n)); \
+        Port_StageTracePtr("TT_RES: ptr", res); \
+    } \
+    Res_RelocateOffsets(&res, res, res); \
+    { \
+        extern void Port_StageTraceInt(const char *what, long value); \
+        Port_StageTraceInt("TT_RES: done", (n)); \
+    }
+#else
 #define TT_RES(n) \
     res = (MTexRes *)MPACK_AT(gTitle->res, n); \
     Res_RelocateOffsets(&res, res, res)
+#endif
 
 /* Loads and unpacks the screen (section `section` of archive 1) and starts the dialog and card modules. */
 void Title_Init(s32 section) {
@@ -74,14 +90,24 @@ void Title_Init(s32 section) {
         Port_StageTrace("Title_Init: arc1");
     }
 #endif
-    gTitle = Heap_Alloc(0xD0, 0x20, 0, 2);
-    memset(gTitle, 0, 0xD0);
+    /* PORT_PS3: the build uses 8-byte pointers for the game's structures, so sizeof(Title) is larger than the
+       PS2's 0xD0. Allocating the PS2 size made tex[21..25]/logo land in the decoded pack buffer and corrupt its
+       section table. */
+    gTitle = Heap_Alloc(sizeof(Title), 0x20, 0, 2);
+    memset(gTitle, 0, sizeof(Title));
     gTitle->pack = (u32 *)MPACK_AT(gMenuArc1, section);
     gTitle->res = Sprite_Unpack(gTitle->pack, NULL, NULL);
 #if defined(PORT_PS3)
     {
         extern void Port_StageTrace(const char *what);
+        extern void Port_StageTraceInt(const char *what, long value);
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
         Port_StageTrace("Title_Init: unpacked");
+        Port_StageTraceInt("Title_Init: sizeof", (long)sizeof(Title));
+        Port_StageTracePtr("Title_Init: gTitle", gTitle);
+        Port_StageTracePtr("Title_Init: res", gTitle->res);
+        Port_StageTraceInt("Title_Init: res w0", gTitle->res != NULL ? (long)((u32 *)gTitle->res)[0] : -1);
+        Port_StageTraceInt("Title_Init: res w1", gTitle->res != NULL ? (long)((u32 *)gTitle->res)[1] : -1);
     }
 #endif
     TT_RES(1);
@@ -120,9 +146,33 @@ void Title_Init(s32 section) {
     gTitle->tex[0] = MTEX(res, 0);
     gTitle->tex[1] = MTEX(res, 1);
     gTitle->tex[2] = MTEX(res, 2);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: flash create");
+    }
+#endif
     Flash_Create(&gTitle->flash[0], MPACK_AT(gTitle->res, 11), gTitle->tex);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: flash play");
+    }
+#endif
     Flash_Play(&gTitle->flash[0], 1);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: dialog init");
+    }
+#endif
     Dialog_Init(MPACK_AT(gTitle->res, 12), NULL, 0);
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTrace(const char *what);
+        Port_StageTrace("Title_Init: mcflow init");
+    }
+#endif
     McFlow_Init(1);
 #if defined(PORT_PS3)
     {
@@ -166,6 +216,19 @@ void Title_Draw(void) {
     char name[64];
     s32 i;
     MFlash *flash;
+
+#if defined(PORT_PS3)
+    {
+        static int sBgTrace;
+        extern void Port_StageTraceInt(const char *what, long value);
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        if (sBgTrace < 4) {
+            Port_StageTracePtr("Title_Draw: bg", gTitle->bg);
+            Port_StageTraceInt("Title_Draw: bg tex", gTitle->bg != NULL ? (long)((MTexRes *)gTitle->bg)->tex : -1);
+            sBgTrace++;
+        }
+    }
+#endif
 
 #ifdef PORT
     Port_MenuPage(1); /* widescreen menus: this screen's page (PORT_MENU_SCREEN in port/src/gs_marker.c), its backdrop filling the width */
@@ -249,6 +312,30 @@ void Title_OnCardCancel(void) {
     Title_ClipGoto(0, 2, "fl_on_start");
 }
 
+#if defined(PORT_PS3)
+/* The PS3 test harness has no player: src/sys/game_pad.c pulses the button this returns (Start to skip the
+   intro, Cross for the menu and the choice) so the title advances by itself. */
+u32 Port_TitleAutoButtons(void) {
+    if (gTitle == NULL) {
+        return 0;
+    }
+    if (gTitle->flags & (TITLE_CHOSEN | TITLE_LEAVING)) {
+        return 0;
+    }
+    if (gTitle->mcState != 0) {
+        return 0;
+    }
+    switch (gTitle->state) {
+    case 0:
+    case 1:
+        return PADG_START;
+    case 2:
+        return PADG_CROSS;
+    }
+    return 0;
+}
+#endif
+
 /* Pad 0: start skips the intro and opens the menu; up / down, confirm, or quit from the menu on PC. */
 void Title_Input(s32 *result) {
 #ifdef PORT
@@ -261,6 +348,12 @@ void Title_Input(s32 *result) {
             Flash_GotoLabel(&gTitle->flash[0], "fl_skip", 1);
             gTitle->state = 1;
             Snd_PlaySe(1, 1);
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                Port_StageTrace("Title_Input: skip intro");
+            }
+#endif
             return;
         }
     }
@@ -287,6 +380,12 @@ void Title_Input(s32 *result) {
             gTitle->state = 2;
             Voice_PlayWithSubtitle(NULL, TITLE_VOICE_BASE, gTitle->voice + 6);
             Snd_PlaySe(2, 0x38);
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                Port_StageTrace("Title_Input: menu in");
+            }
+#endif
         } else {
             Title_Idle(result);
         }
@@ -324,6 +423,14 @@ void Title_Input(s32 *result) {
         } else if (gPad[0].gamePressed & 0x200) {
             gTitle->idle = 0;
             Title_ClipGoto(0, 2, "fl_ok");
+#if defined(PORT_PS3)
+            {
+                extern void Port_StageTrace(const char *what);
+                extern void Port_StageTraceInt(const char *what, long value);
+                Port_StageTrace("Title_Input: confirm");
+                Port_StageTraceInt("Title_Input: cursor", gTitle->cursor);
+            }
+#endif
             switch (gTitle->cursor) {
             case 0:
                 McFlow_Start(3);

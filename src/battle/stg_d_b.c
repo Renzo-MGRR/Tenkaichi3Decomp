@@ -9,6 +9,7 @@
  * simulation does.
  */
 #include "common.h"
+#include "sys/common.h"
 #include "sys/math3d.h"
 #include "sys/randf.h"
 #include "sys/vu1_packet.h"
@@ -53,19 +54,12 @@ typedef struct StgAnimStage {
     /* 0x04 */ StgAnimData *data;
 } StgAnimStage;
 
-/* Local view of the common resources: the stage file pointer (BattleRes.stage). */
-typedef struct StgAnimRes {
-    /* 0x00 */ u8 unk0[0x24];
-    /* 0x24 */ u32 *stage;
-} StgAnimRes;
-
 /* Local view of the battle work: only the flag word. */
 typedef struct StgAnimWork {
     /* 0x0000 */ u8 unk0[0x19F0];
     /* 0x19F0 */ u64 flags;    /* 0x100: paused */
 } StgAnimWork;
 
-extern StgAnimRes *gCommonRes;
 extern StgAnimStage *gBtlStage;
 /* 0x2FE914: this object's only .sdata word (stgm_a.c reads it too). */
 StgAnimTable *gStgAnimTable = NULL;
@@ -80,8 +74,8 @@ extern void Res_RelocateOffsets(void *out, void *base, void *hdr);
 
 /* Starts the stage: the stage object is the block at header word 1 of the stage file. */
 void StgModel_InitStage(void) {
-    u32 *file = gCommonRes->stage;
-    void *stage = (u8 *)file + file[1] / 4 * 4;
+    u32 *file = *(u32 **)(gCommonRes->unk20 + 4);
+    void *stage = (u8 *)file + Port_ReadLe32(&file[1]) / 4 * 4;
 
     BtlStage_Init(stage, stage);
 }
@@ -119,7 +113,7 @@ void StgModel_ResetAnims(void) {
 
 /* Binds the animation table (member 6 of the stage file) and prepares each animation's model and packet. */
 void StgModel_BindAnims(void) {
-    u32 *file = gCommonRes->stage;
+    u32 *file = *(u32 **)(gCommonRes->unk20 + 4);
     void *res;
     u32 *node;
     s32 i;
@@ -128,11 +122,11 @@ void StgModel_BindAnims(void) {
     if (file == NULL) {
         return;
     }
-    if (file[10] == file[9]) {
+    if (Port_ReadLe32(&file[10]) == Port_ReadLe32(&file[9])) {
         gStgAnimTable = NULL;
         return;
     }
-    gStgAnimTable = (StgAnimTable *)((u8 *)file + file[9] / 4 * 4);
+    gStgAnimTable = (StgAnimTable *)((u8 *)file + Port_ReadLe32(&file[9]) / 4 * 4);
     StgOfsTable_Relocate(gStgAnimTable);
     count = StgOfsTable_GetCount(gStgAnimTable);
     for (i = 0; i < count; i += 3) {

@@ -12,8 +12,14 @@ extern void Port_StageTrace(const char *what);
 #endif
 
 typedef struct DialogProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers before flags (see battle/view_a.h): 0x20, not 0x14. */
+    /* 0x00 */ u8 unk0[0x20];
+    /* 0x20 */ s32 flags; /* Progress.flags: bit 0x100 blocks dialog input */
+#else
     /* 0x00 */ u8 unk0[0x14];
     /* 0x14 */ s32 flags; /* Progress.flags: bit 0x100 blocks dialog input */
+#endif
 } DialogProgress;
 
 typedef struct DialogRect {
@@ -577,6 +583,15 @@ s32 Dialog_IsClosed(void) {
 /* 1 while the window is fully open (the animation's flag bit 1). */
 s32 Dialog_IsOpen(void) {
     return (gDialog->flash[0].flags >> 1) & 1;
+}
+
+/* The cursor and whether the choice plates are shown (the PS3 test harness's autopilot reads them). */
+s32 Dialog_GetCursor(void) {
+    return gDialog->cursor;
+}
+
+s32 Dialog_HasChoices(void) {
+    return gDialog->choices != 0;
 }
 
 /* The message table inside the window's resource file. */

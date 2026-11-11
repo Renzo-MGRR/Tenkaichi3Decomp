@@ -179,8 +179,8 @@ void HistResult_Init(s32 section) {
     s32 bg;
 
     flags = BattleResult_GetFlags();
-    gHistResult = Heap_Alloc(0x140, 0x20, 0, 2);
-    memset(gHistResult, 0, 0x140);
+    gHistResult = Heap_Alloc(sizeof(*gHistResult), 0x20, 0, 2);
+    memset(gHistResult, 0, sizeof(*gHistResult));
     gHistResult->pack = (u32 *)MPACK_AT(gMenuArc2, section);
     gHistResult->res = Sprite_Unpack(gHistResult->pack, NULL, NULL);
     gHistResult->file = File_LoadSync(gProgress->baseFile + gProgress->subMenu + 0x10, NULL, 0);

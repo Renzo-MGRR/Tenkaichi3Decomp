@@ -244,10 +244,10 @@ void TextBox_AttachLine(Flash *flash, FlashRef *ref, s32 x, s32 y, s32 line, Tex
         return;
     }
 #ifdef PORT
-#define TB_ATTACH_STR(str, box) str = (u16 *)((u8 *)TB(box)->text + ((((u32 *)TB(box)->text)[line + 1] >> 2) << 2)); \
+#define TB_ATTACH_STR(str, box) str = (u16 *)((u8 *)TB(box)->text + ((Pack_ReadOffset(TB(box)->text, line + 1) >> 2) << 2)); \
     str = (u16 *)UiText_TranslateLine((const u32 *)TB(box)->text, line, str);
 #else
-#define TB_ATTACH_STR(str, box) str = (u16 *)((u8 *)TB(box)->text + ((((u32 *)TB(box)->text)[line + 1] >> 2) << 2));
+#define TB_ATTACH_STR(str, box) str = (u16 *)((u8 *)TB(box)->text + ((Pack_ReadOffset(TB(box)->text, line + 1) >> 2) << 2));
 #endif
     TB_ATTACH(flash, ref, x, y, str, box);
 #undef TB_ATTACH_STR

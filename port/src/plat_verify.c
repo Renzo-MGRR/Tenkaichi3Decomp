@@ -268,6 +268,16 @@ void Port_VerifyStart(void) {
     pthread_t th;
     pthread_attr_t attr;
 
+#if defined(PORT_PS3)
+    /* The background check is for the PC build, where the data folder may be a modded copy. On the PS3 the data is
+       the disc's, and RPCS3 crashes natively while this thread scans files (a second PPU thread in newlib's file
+       code): do not start it. */
+    (void)v;
+    (void)gs;
+    (void)th;
+    (void)attr;
+    return;
+#endif
     if (once) { /* (the caller runs again when the game restarts itself) */
         return;
     }

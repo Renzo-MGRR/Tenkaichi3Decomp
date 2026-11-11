@@ -1,5 +1,6 @@
 #include "common.h"
 #include "battle/eft_b.h"
+#include "sys/common.h"
 #include "sys/gfx_ot.h"
 
 #ifdef PORT
@@ -52,12 +53,6 @@ typedef struct EftBCam {
     /* 0x720 */ EftBView views[2];
 } EftBCam;
 
-/* gCommonRes: only the stage model file (battle/battle_work.h BattleRes.stage). */
-typedef struct EftBCommonRes {
-    /* 0x00 */ u8 unk0[0x24];
-    /* 0x24 */ u8 *stage;
-} EftBCommonRes;
-
 /* The stage manager: only its flag word. */
 typedef struct EftBStage {
     /* 0x00 */ u8 unk0[8];
@@ -74,7 +69,7 @@ typedef struct EftBCamAt {
 
 extern EftBView *gBtlCamView;
 extern EftBCam *gBtlCam;
-extern EftBCommonRes *gCommonRes;
+
 extern EftBStage *gBtlStage;
 
 extern void *memset(void *dst, s32 c, u32 n);
@@ -1349,14 +1344,14 @@ void EftStageScroll_PlaceTextures(s32 tcc, s32 tfx) {
 void EftStageScroll_Load(void) {
     Vec4 dir;
     s32 v;
-    u8 *file = gCommonRes->stage;
+    u8 *file = *(u8 **)(gCommonRes->unk20 + 4);
     u8 *p;
     u8 *texPack;
     f32 deg;
     f32 angle;
 
-    p = file + (*(u32 *)(file + 0x1C) / 4) * 4;
-    texPack = file + (*(u32 *)(file + 0x18) / 4) * 4;
+    p = file + (Port_ReadLe32(file + 0x1C) / 4) * 4;
+    texPack = file + (Port_ReadLe32(file + 0x18) / 4) * 4;
     gEftStageScroll->enabled = 1;
     EFTB_READ_INT(v, p);
     gEftStageScroll->size = v;

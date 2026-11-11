@@ -654,8 +654,8 @@ void Train_Init(s32 section) {
     MTexRes *res = NULL;
     s32 i;
 
-    gTrain = Heap_Alloc(0x1BE0, 0x20, 0, 2);
-    memset(gTrain, 0, 0x1BE0);
+    gTrain = Heap_Alloc(sizeof(*gTrain), 0x20, 0, 2);
+    memset(gTrain, 0, sizeof(*gTrain));
     gTrain->pack = (u32 *)MPACK_AT(gMenuArc6, section);
     gTrain->res = Sprite_Unpack(gTrain->pack, NULL, NULL);
     TR_RES(2, TR_HOST "ut_bg_PS2_.dbt");

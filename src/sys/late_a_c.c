@@ -48,9 +48,9 @@ void ShenSave_OnFlowDone(s32 arg) {
 void ShenSave_Init(s32 section) {
     gShenSave = Heap_Alloc(sizeof(ShenSave), 0x20, 0, HEAP_ANY);
     memset(gShenSave, 0, sizeof(ShenSave));
-    gShenSave->pack = PACK_AT(gMenuArc12, section);
+    gShenSave->pack = PACK_AT_BE(gMenuArc12, section);
     gShenSave->res = Sprite_Unpack(gShenSave->pack, NULL, NULL);
-    Dialog_Init(PACK_AT(gShenSave->res, 10), NULL, 0);
+    Dialog_Init(PACK_AT_BE(gShenSave->res, 10), NULL, 0);
     McFlow_Init(1);
     McFlow_SetDoneCb(0, ShenSave_OnFlowDone, 0);
     McFlow_SetDoneCb(1, ShenSave_OnFlowDone, 0);

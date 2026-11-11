@@ -44,8 +44,8 @@ void ItemPanel_Init(u32 *pack, s32 side) {
     ItemPanel *p;
     s32 i;
 
-    gItemPanel[side] = Heap_Alloc(0x6C8, 0x20, 0, 2);
-    memset(gItemPanel[side], 0, 0x6C8);
+    gItemPanel[side] = Heap_Alloc(sizeof(*gItemPanel[side]), 0x20, 0, 2);
+    memset(gItemPanel[side], 0, sizeof(*gItemPanel[side]));
     p = gItemPanel[side];
     IP_RES(16);
     p->tex[12] = MTEX(res, 0);

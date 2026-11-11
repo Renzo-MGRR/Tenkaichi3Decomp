@@ -192,6 +192,17 @@ typedef struct ProgressTeam {
 
 /* gProgress as this file uses it (ViewProgress in battle/view_a.h has the other fields). Local view. */
 typedef struct MenuUtilProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers after fileBase: every field from flags on is 12 bytes
+       further into the block than on the PS2 (flags 0x20, demoPick 0x30, team 0x6A8). */
+    /* 0x000 */ u8 unk0[0x20];
+    /* 0x020 */ s32 flags;       /* 0x100: the menu animations are frozen */
+    /* 0x024 */ u8 unk18[0xC];
+    /* 0x030 */ s32 demoPick;    /* the pairing Demo_SetupBattle chose last, -1 at start */
+    /* 0x034 */ u8 unk28[0x6A8 - 0x34];
+    /* 0x6A8 */ ProgressTeam team[PROGRESS_TEAM_COUNT];
+    /* 0x7DC */ u8 unk7D0[0x2C];
+#else
     /* 0x000 */ u8 unk0[0x14];
     /* 0x014 */ s32 flags;       /* 0x100: the menu animations are frozen */
     /* 0x018 */ u8 unk18[0xC];
@@ -199,7 +210,8 @@ typedef struct MenuUtilProgress {
     /* 0x028 */ u8 unk28[0x69C - 0x28];
     /* 0x69C */ ProgressTeam team[PROGRESS_TEAM_COUNT];
     /* 0x7D0 */ u8 unk7D0[0x2C];
-} MenuUtilProgress; /* size 0x7FC */
+#endif
+} MenuUtilProgress; /* size 0x7FC (0x808 with 8-byte pointers) */
 
 /* The characters that are never "the same person" as another (ChrTbl_IsRelated). */
 #define CHRTBL_ID_4F 0x4F

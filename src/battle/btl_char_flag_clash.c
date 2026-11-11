@@ -52,8 +52,14 @@ extern BtlFlagRoster *gBtlChars;
 extern Vec4 D_002EC2A0; /* zero vector */
 
 typedef struct BtlClashProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers before this field (see battle/view_a.h): 0x48, not 0x3C. */
+    /* 0x00 */ u8 unk0[0x48];
+    /* 0x48 */ s32 unk3C; /* difficulty */
+#else
     /* 0x00 */ u8 unk0[0x3C];
     /* 0x3C */ s32 unk3C; /* difficulty */
+#endif
 } BtlClashProgress;
 extern BtlClashProgress *gProgress;
 

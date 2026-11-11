@@ -28,7 +28,8 @@ typedef struct BtlCharVoice {
     /* 0xE4 */ s32 timer[BTL_VOICE_KINDS]; /* frames until the kind may play again */
 } BtlCharVoice; /* size 0x1C8 */
 
-/* Entry of the voice table (roster + 0x28). */
+/* Entry of the voice table (BtlCharMgr.tbl[2], common file 2 word 6). The fields are little-endian on the
+   PS3; read them through the helpers in btl_char_get.c. */
 typedef struct BtlVoiceEntry {
     /* 0x0 */ s16 first;    /* first line */
     /* 0x2 */ s16 count;    /* number of lines */
@@ -61,18 +62,6 @@ typedef struct BtlCharGetChr {
     /* 0x15D0 */ BtlCharVib vib;
     /* 0x15E8 */ u8 unk15E8[0x1600 - 0x15E8];
 } BtlCharGetChr; /* size 0x1600 */
-
-/* Fighter roster (gBtlChars, 0x280 bytes). */
-typedef struct BtlCharGetRoster {
-    /* 0x00 */ s32 count;
-    /* 0x04 */ BtlCharGetChr *chars;
-    /* 0x08 */ u8 unk8[0x14 - 0x8];
-    /* 0x14 */ s32 frame;       /* frames simulated since BtlChar_ResetAll, 30 bits */
-    /* 0x18 */ u32 randState;   /* BtlChar_Rand; 0 at BtlChar_ResetAll */
-    /* 0x1C */ s32 stageTimer;  /* BtlChar_AddStageTimer; counts down to 0 */
-    /* 0x20 */ u8 unk20[0x28 - 0x20];
-    /* 0x28 */ BtlVoiceEntry *voiceTbl;
-} BtlCharGetRoster;
 
 f32 BtlUtil_WrapAngle(f32 a);
 void BtlUtil_WrapAngles(Vec4 *dst, Vec4 *src);

@@ -554,11 +554,11 @@ void Shen_Init(ShenWork *work, s32 section) {
     FlashTexRes *res = NULL;
     s32 i;
 
-    work->pack = PACK_AT(gMenuArc12, section);
+    work->pack = PACK_AT_BE(gMenuArc12, section);
     work->res = Sprite_Unpack(work->pack, NULL, NULL);
 
     Shen_DebugFile("host:data/test/shenron/sr_select_top_tex_PS2_.dbt");
-    res = PACK_AT(work->res, 4);
+    res = PACK_AT_BE(work->res, 4);
     Res_RelocateOffsets(&res, res, res);
     work->tex[0] = res->tex;
     work->tex[1] = res->tex + FLASH_TEX_SIZE;
@@ -570,37 +570,37 @@ void Shen_Init(ShenWork *work, s32 section) {
     work->tex[3] = NULL;
     Shen_DebugFile("host:data/test/shenron/shenron_PS2_.fod");
     for (i = 0; i < SHEN_FLASH_COUNT; i++) {
-        Flash_Create(&work->flash[i], PACK_AT(work->res, 3), work->tex);
+        Flash_Create(&work->flash[i], PACK_AT_BE(work->res, 3), work->tex);
     }
 
     Shen_DebugFile("host:data/test/shenron/sr_select_top_title_JP_PS2_.dbt");
-    res = PACK_AT(work->res, 5);
+    res = PACK_AT_BE(work->res, 5);
     Res_RelocateOffsets(&res, res, res);
     Shen_DebugFile("host:data/test/shenron/if_title_line_PS2_.pak");
-    IconWin_Init(PACK_AT(work->res, 8), res);
+    IconWin_Init(PACK_AT_BE(work->res, 8), res);
 
     Shen_DebugFile("host:data/test/shenron/shenron_msg_JP_PS2_.pak");
-    work->msg = PACK_AT(work->res, 1);
+    work->msg = PACK_AT_BE(work->res, 1);
     Shen_DebugFile("host:data/test/shenron/if_msg_window_PS2_.pak");
-    MsgWin_Init4(PACK_AT(work->res, 9), work->msg, 0, work->unk5C);
+    MsgWin_Init4(PACK_AT_BE(work->res, 9), work->msg, 0, work->unk5C);
     Shen_DebugFile("host:data/test/shenron/if_system_window_JP_PS2_.pak");
-    Dialog_Init(PACK_AT(work->res, 10), work->msg, 0);
+    Dialog_Init(PACK_AT_BE(work->res, 10), work->msg, 0);
     Shen_DebugFile("host:data/test/shenron/reconfir_JP_PS2_.pak");
-    ShenCfm_Init(PACK_AT(work->res, 6));
+    ShenCfm_Init(PACK_AT_BE(work->res, 6));
     Shen_DebugFile("host:data/test/shenron/zitem_parameter_PS2_.dat");
-    work->items = PACK_AT(work->res, 7);
+    work->items = PACK_AT_BE(work->res, 7);
     Shen_DebugFile("host:data/test/shenron/get_window_JP_PS2_.pak");
-    GetWin_Init(PACK_AT(work->res, 11), 0);
+    GetWin_Init(PACK_AT_BE(work->res, 11), 0);
 
     Shen_DebugFile("host:data/test/shenron/font_BattleTutorial_CC_JP_PS2_.pak");
-    work->font = PACK_AT(work->res, 13);
+    work->font = PACK_AT_BE(work->res, 13);
     for (i = 0; i < 5; i++) {
         TextBox_Init(&work->box[i], work->font, 2);
         TextBox_SetRect(&work->box[i], 0, 0x200, 0x6A, 0x11E);
     }
 
     Shen_DebugFile("host:data/test/shenron/shenron_list_PS2_.dat");
-    Shen_BuildList(work, PACK_AT(work->res, 2));
+    Shen_BuildList(work, PACK_AT_BE(work->res, 2));
     gSaveData->unlockFlags &= ~0x7F;
 }
 
@@ -689,7 +689,7 @@ s32 Shen_UpdateTalk(ShenWork *work) {
             Flash_Play(work->flash, 1);
         }
         if (!(work->flags & SHEN_FLAG_LIST_ON)) {
-            if (work->flash[0].unk0[2] & 2) {
+            if (work->flash[0].flags & 2) {
                 Shen_SetPlate(work->flash, work->cursor, 1);
                 work->flags |= SHEN_FLAG_LIST_ON;
             }
@@ -736,7 +736,7 @@ void Shen_Update(ShenWork *work) {
     if (Shen_UpdateTalk(work)) {
         return;
     }
-    if (!(work->flash[0].unk0[2] & 2)) {
+    if (!(work->flash[0].flags & 2)) {
         return;
     }
     switch (work->state) {

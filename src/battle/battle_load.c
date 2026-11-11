@@ -126,7 +126,7 @@ extern void BtlScript_ScanEvents(s32 script);
 extern void BtlScript_Restart(void);
 extern void BtlScript_Free(void);
 
-#define BATTLE_RES ((BattleRes *)((u8 *)gCommonRes + 0x20))
+#define BATTLE_RES ((BattleRes *)gCommonRes->unk20)
 
 /* Returns the loader job pool. */
 BtlJobPool *BtlJob_GetPool(void) {

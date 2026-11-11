@@ -13,6 +13,15 @@ void *Sprite_Unpack(void *src, void *dst, s32 *rawSize) {
     void *out = Bpe_Decode(src, dst, &size);
     extern void File_ConvertPackHeader(void *pack, s32 size);
     File_ConvertPackHeader(out, size);
+    {
+        extern void Port_StageTraceInt(const char *what, long value);
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        Port_StageTracePtr("Sprite_Unpack: out", out);
+        Port_StageTraceInt("Sprite_Unpack: conv0", (long)((u32 *)out)[0]);
+        Port_StageTraceInt("Sprite_Unpack: conv1", (long)((u32 *)out)[1]);
+        Port_StageTraceInt("Sprite_Unpack: conv2", (long)((u32 *)out)[2]);
+        Port_StageTraceInt("Sprite_Unpack: conv3", (long)((u32 *)out)[3]);
+    }
     if (rawSize != NULL) *rawSize = size;
     return out;
 #else
@@ -45,6 +54,23 @@ void Sprite_DrawPicture(SpriteRes *res, s32 x, s32 y, s32 alpha) {
     if (alpha == 0) {
         return;
     }
+#if defined(PORT_PS3)
+    {
+        static int sN;
+        extern void Port_StageTraceInt(const char *what, long value);
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        if (res == NULL || res->tex == NULL || sN < 3) {
+            Port_StageTracePtr("Sprite_DrawPicture: res", res);
+            Port_StageTraceInt("Sprite_DrawPicture: tex", res != NULL ? (long)(u32)res->tex : -1);
+            if (sN < 3) {
+                sN++;
+            }
+        }
+        if (res == NULL || res->tex == NULL) {
+            return;
+        }
+    }
+#endif
     Gfx_AddDefaultEnv();
     yy = y;
     p = Dma_BeginDirect();

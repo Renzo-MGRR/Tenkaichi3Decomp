@@ -224,17 +224,17 @@ void BtlScene_Draw(s32 first) {
 s32 *BtlScene_GetCommonEntry(s32 idx) {
     s32 *base = gCommonRes->data[1];
 
-    return (s32 *)((u8 *)base + ((u32)base[idx] >> 2 << 2));
+    return (s32 *)((u8 *)base + ((Port_ReadLe32(&base[idx]) >> 2) << 2));
 }
 
 /* Returns entry idx of a pack: base + (offset table word idx, rounded down to 4). */
 s32 *BtlScene_GetPackEntry(s32 *base, s32 idx) {
-    return (s32 *)((u8 *)base + ((u32)base[idx] >> 2 << 2));
+    return (s32 *)((u8 *)base + ((Port_ReadLe32(&base[idx]) >> 2) << 2));
 }
 
 /* Returns the size of entry idx of a pack (next offset - this offset). */
 s32 BtlScene_GetPackEntrySize(s32 *base, s32 idx) {
-    return base[idx + 1] - base[idx];
+    return (s32)(Port_ReadLe32(&base[idx + 1]) - Port_ReadLe32(&base[idx]));
 }
 
 /* Tests bit (bit - 1) of the first word of entry 1 of entry 1 of a character's pack. */
@@ -246,7 +246,7 @@ s32 BtlScene_TestCharPackBit(s32 side, s32 bit) {
     u32 mask = 1 << (bit - 1);
     u32 *flags = (u32 *)BtlScene_GetPackEntry(pack, 1);
 
-    return (*flags & mask) != 0;
+    return (Port_ReadLe32(flags) & mask) != 0;
 }
 
 /* Returns entry idx of a character's pack (0x2053B0), or NULL when the character has none. */
@@ -254,14 +254,14 @@ s32 *BtlScene_GetCharPackEntry(s32 side, s32 idx) {
     s32 *base = BtlCharApi_GetPlayerObjUnk58(side);
 
     if (base != NULL) {
-        return (s32 *)((u8 *)base + ((u32)base[idx] >> 2 << 2));
+        return (s32 *)((u8 *)base + ((Port_ReadLe32(&base[idx]) >> 2) << 2));
     }
     return base;
 }
 
-/* Returns gCommonRes + 0x24 (the stage data pointer). */
+/* Returns the stage data pointer (BattleRes.stage). */
 s32 BtlScene_GetStageData(void) {
-    return *(s32 *)((u8 *)gCommonRes + 0x24);
+    return *(s32 *)(gCommonRes->unk20 + 4);
 }
 
 /* Returns 0 only when the stage is ready and the battle is not paused. */

@@ -14,7 +14,7 @@ extern void *memset(void *dst, s32 c, u32 n);
 
 /* A section of common file 4. */
 #define CHRTBL_FILE ((ChrTblFile *)gCommonRes->data[2])
-#define CHRTBL_SECTION(file, ofs) ((u8 *)(file) + (((file)->ofs >> 2) << 2))
+#define CHRTBL_SECTION(file, ofs) ((u8 *)(file) + ((Port_ReadLe32(&(file)->ofs) >> 2) << 2))
 
 /* Returns the character's number of costumes, and sets *costume to 0 if it is not one of them. */
 s32 ChrTbl_WrapCostume(s32 chara, s32 *costume) {

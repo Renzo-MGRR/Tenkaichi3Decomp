@@ -1,5 +1,6 @@
 #include "common.h"
 #include "battle/eft_d.h"
+#include "sys/common.h"
 #include "sys/dma.h"
 #include "sys/gfx.h"
 
@@ -1282,11 +1283,7 @@ typedef struct EftSteamPkt {
 } EftSteamPkt; /* size 0x80 */
 
 
-typedef struct EftCommonRes {
-    u8 unk0[0x34];
-    s32 *transition;
-} EftCommonRes;
-extern EftCommonRes *gCommonRes;
+
 
 /* Layer 4 init: creates the list that will hold the one transition task. */
 void EftBurstLayer_Init(void *task) {
@@ -1546,7 +1543,7 @@ void EftBurst_Reset(void *task) {
 
 /* Called by the stage swap once the transition file is loaded: resolves its entries and asks for the task. */
 void EftBurst_Start(void) {
-    s32 *pack = gCommonRes->transition;
+    s32 *pack = *(s32 **)(gCommonRes->unk20 + 0x14);
 
     gEftBurstRes.file2 = BtlScene_GetPackEntry(pack, 2);
     EftBurst_RelocateModel(gEftBurstRes.file2);

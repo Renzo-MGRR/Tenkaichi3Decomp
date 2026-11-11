@@ -1,4 +1,5 @@
 #include "common.h"
+#include "sys/common.h"
 #include "sys/dma.h"
 #include "sys/heap.h"
 #include "sys/pad.h"
@@ -13,18 +14,21 @@ typedef struct PadWatchBattleWork {
 } PadWatchBattleWork;
 
 typedef struct PadWatchProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers before mode (see battle/view_a.h): mode is 0x24. */
+    /* 0x000 */ u8 unk0[0x24];
+    /* 0x024 */ s32 mode;
+    /* 0x028 */ u8 unk1C[0x604];
+    /* 0x62C */ s32 unk620; /* 1: the screen of mode 0x27 / 0x28 needs both controllers */
+#else
     /* 0x000 */ u8 unk0[0x18];
     /* 0x018 */ s32 mode;
     /* 0x01C */ u8 unk1C[0x604];
     /* 0x620 */ s32 unk620; /* 1: the screen of mode 0x27 / 0x28 needs both controllers */
+#endif
 } PadWatchProgress;
 
-typedef struct PadWatchCommonRes {
-    /* 0x00 */ u32 *boot; /* CommonRes.boot (file 5); words at +0x24: offsets of the three messages */
-} PadWatchCommonRes;
-
 extern PadWatchProgress *gProgress;
-extern PadWatchCommonRes *gCommonRes;
 
 extern PadWatchBattleWork *Battle_GetWork(void);
 extern s32 Battle_IsSplitScreen(void);

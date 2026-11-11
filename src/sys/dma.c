@@ -123,6 +123,17 @@ void *Dma_Alloc(s32 size) {
 u64 *Dma_BeginDirect(void) {
     u128 *tag = (u128 *)gDmaCur;
 
+#if defined(PORT_PS3)
+    if ((u32)gDmaCur < gDmaBuf[0] - 0x1000u || (u32)gDmaCur > gDmaBuf[1] + (u32)DMA_BUF_SIZE + 0x1000u) {
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("Dma_Begin: bad cur", (long)(u32)gDmaCur);
+        Port_StageTraceInt("Dma_Begin: buf0", (long)gDmaBuf[0]);
+        Port_StageTraceInt("Dma_Begin: buf1", (long)gDmaBuf[1]);
+        Port_StageTraceInt("Dma_Begin: size", (long)gDmaBufSize);
+        Port_StageTraceInt("Dma_Begin: idx", (long)gDmaBufIdx);
+    }
+#endif
+
 #ifdef PORT
     tag->lo = 0;
     tag->hi = 0;
@@ -136,6 +147,15 @@ u64 *Dma_BeginDirect(void) {
 void Dma_EndDirect(u64 *end) {
     u32 *tag = gDmaCur;
     s32 qwc;
+
+#if defined(PORT_PS3)
+    if ((u8 *)end < (u8 *)tag || (u8 *)end - (u8 *)tag > 0x200000u) {
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("Dma_End: tag", (long)(u32)tag);
+        Port_StageTraceInt("Dma_End: end", (long)(u32)end);
+        Port_StageTraceInt("Dma_End: delta", (long)((u8 *)end - (u8 *)tag));
+    }
+#endif
 
     if ((u32 *)end != tag + 4) {
         qwc = (((u8 *)end - (u8 *)tag) >> 4) - 1;

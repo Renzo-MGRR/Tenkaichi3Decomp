@@ -85,19 +85,25 @@ void Pad_UpdateGameButtons(s32 pad) {
 
 #if defined(PORT_PS3)
     {
-        /* Boot memory-card prompt: no player is present, so a Cross pulse advances it once the dialog is
-           fully open (Port_BootConfirmWanted waits two seconds and stops when the state changes). Only pad 0
-           owns the pulse counter: pad 1 must not reset it every frame. */
-        extern s32 Port_BootConfirmWanted(void);
-        static u32 sConfirmTick;
+        /* No player is present: the title and the card dialogs drive themselves (Port_TitleAutoButtons,
+           Port_AutoPadButtons). One 1-frame pulse every 20 frames, so every screen is seen and each press is a
+           new one. Only pad 0 owns the pulse counter: pad 1 must not reset it every frame. */
+        extern u32 Port_TitleAutoButtons(void);
+        extern u32 Port_AutoPadButtons(void);
+        static u32 sAutoTick;
+        u32 autoBtn;
         if (pad == 0) {
-            if (Port_BootConfirmWanted()) {
-                if ((sConfirmTick % 20) == 0) {
-                    btn |= PADG_CROSS;
+            autoBtn = Port_TitleAutoButtons();
+            if (autoBtn == 0) {
+                autoBtn = Port_AutoPadButtons();
+            }
+            if (autoBtn != 0) {
+                if ((sAutoTick % 6) == 0) {
+                    btn |= autoBtn;
                 }
-                sConfirmTick++;
+                sAutoTick++;
             } else {
-                sConfirmTick = 0;
+                sAutoTick = 0;
             }
         }
     }

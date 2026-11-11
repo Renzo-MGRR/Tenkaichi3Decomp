@@ -206,7 +206,7 @@ void BtlObjLight_Init(void) {
     CommonRes *res = gCommonRes;
 
     memset(light, 0, sizeof(BtlObjLight));
-    light->res = (u8 *)res->data[0] + ((((u32 *)res->data[0])[1] >> 2) << 2);
+    light->res = (u8 *)res->data[0] + ((Port_ReadLe32((u8 *)res->data[0] + 4) >> 2) << 2);
     Res_RelocateOffsets(&light->res, light->res, light->res);
     Vec4_Set(&dir, 0.34f, -0.006f, 0.941f, 1.0f);
     BtlObjLight_SetDir(&dir);
@@ -538,8 +538,11 @@ void BtlRes_CommitReloadEx(void) {
 
 /* Allocates the work block and initialises every part of it. */
 void BtlObj_Init(s32 prealloc) {
-    gBtlObjWork = Heap_Alloc(BTL_OBJ_WORK_SIZE, 0x20, 0, HEAP_ANY);
-    memset(gBtlObjWork, 0, BTL_OBJ_WORK_SIZE);
+    /* The PS2 size (BTL_OBJ_WORK_SIZE) is too small for the port's 8-byte pointers: the resource part at the
+       end of the block would lie past the allocation, and BtlRes_Init's memset would clear the next heap
+       block's header (seen as "Heap: bad magic"). Allocate the struct's real size. */
+    gBtlObjWork = Heap_Alloc(sizeof(BtlObjWork), 0x20, 0, HEAP_ANY);
+    memset(gBtlObjWork, 0, sizeof(BtlObjWork));
     BtlRes_Init(prealloc);
     BtlObj_InitTable();
     BtlObjPoolE0_Init();

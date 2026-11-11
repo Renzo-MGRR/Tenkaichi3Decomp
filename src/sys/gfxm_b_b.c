@@ -269,6 +269,11 @@ void Res_RelocateOffsets(TexFile **out, u8 *base, TexFile *hdr) {
     {
         u8 *h = (u8 *)hdr;
         u32 count = Tex_ReadLe32(h), entOfs = Tex_ReadLe32(h + 4);
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("Reloc: hdr", (long)(u32)Port_Addr(hdr));
+        Port_StageTraceInt("Reloc: base", (long)(u32)Port_Addr(base));
+        Port_StageTraceInt("Reloc: rawCount", (long)count);
+        Port_StageTraceInt("Reloc: rawEnt", (long)entOfs);
         Tex_StoreBe32(h, count); Tex_StoreBe32(h + 4, entOfs);
         for (i = 0; i < count; i++) {
             u8 *q = base + entOfs * 4 + i * sizeof(TexEntry);
@@ -279,6 +284,7 @@ void Res_RelocateOffsets(TexFile **out, u8 *base, TexFile *hdr) {
                 memcpy(q + 0x30, &v, 8);
             }
         }
+        Port_StageTraceInt("Reloc: swapped", (long)count);
     }
 #endif
     *out = hdr;
@@ -300,6 +306,12 @@ void Res_RelocateOffsets(TexFile **out, u8 *base, TexFile *hdr) {
 #endif
         }
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("Reloc: done", (long)hdr->count);
+    }
+#endif
 }
 
 #if defined(PORT_PS3)

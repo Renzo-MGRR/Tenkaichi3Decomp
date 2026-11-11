@@ -1,5 +1,6 @@
 #include "common.h"
 #include "battle/btl_char_get.h"
+#include "battle/btl_char_mgr.h"
 #ifdef PORT
 #include "bt3_zcounter2.h"
 #endif
@@ -31,7 +32,7 @@ extern void BtlCharSnd_PlayVoice(BtlCharGetChr *chr, s32 line);    /* sound requ
 extern void BtlCharSnd_StopOwn(BtlCharGetChr *chr, s32 line);
 extern s32 BtlScript_IsTextShown(void);
 
-extern BtlCharGetRoster *gBtlChars;
+
 
 /* Brings an angle back into -pi..pi (one turn at most). */
 f32 BtlUtil_WrapAngle(f32 a) {
@@ -164,9 +165,10 @@ s32 BtlChar_GetCount(void) {
     return gBtlChars->count;
 }
 
-/* Fighter i. */
+/* Fighter i. The real BtlMgrChr is 0x1610 bytes with 8-byte pointers (its trailing objTbl[3]), while the local
+   view ends at 0x1600; index with the real struct's size so fighter 1 is not read 0x10 bytes early. */
 BtlCharGetChr *BtlChar_Get(s32 i) {
-    return &gBtlChars->chars[i];
+    return (BtlCharGetChr *)((u8 *)gBtlChars->chars + (u32)i * sizeof(BtlMgrChr));
 }
 
 /* Fighter that owns battle object objId, or NULL. */
@@ -262,11 +264,11 @@ s32 BtlChar_FrameMod(s32 n) {
 
 /* The fighters' random generator: 0..150888. The state is kept unchanged while roster+0x274 is set. */
 s32 BtlChar_Rand(void) {
-    u64 state = gBtlChars->randState;
+    u64 state = gBtlChars->unk18;
     s32 next = (state * 714025 + 4096) % 150889;
 
     if (!BtlChars_IsTimeStopped()) {
-        gBtlChars->randState = next;
+        gBtlChars->unk18 = next;
     }
     return next;
 }
@@ -291,7 +293,7 @@ void BtlChar_AddStageTimer(f32 seconds) {
     s32 frames = seconds * 30.0f;
 
     if (BtlChar_IsStage4Or27() && gBtlChars != NULL) {
-        gBtlChars->stageTimer = BtlUtil_Min(gBtlChars->stageTimer + frames, 150);
+        gBtlChars->unk1C = BtlUtil_Min(gBtlChars->unk1C + frames, 150);
     }
 }
 
@@ -370,9 +372,29 @@ void BtlChar_UpdateVibration(BtlCharGetChr *chr) {
     }
 }
 
+/* The voice table is common file 2's word-6 section (BtlCharMgr.tbl[2]); its entries are little-endian like
+   the rest of the file. */
+static inline s16 BtlVoice_First(const BtlVoiceEntry *ent) {
+    return (s16)Port_ReadLe16(&ent->first);
+}
+
+static inline s16 BtlVoice_Count(const BtlVoiceEntry *ent) {
+    return (s16)Port_ReadLe16(&ent->count);
+}
+
+static inline f32 BtlVoice_Interval(const BtlVoiceEntry *ent) {
+    union {
+        u32 u;
+        f32 f;
+    } bits;
+
+    bits.u = Port_ReadLe32(&ent->interval);
+    return bits.f;
+}
+
 /* Entry of the voice table for a kind. */
 BtlVoiceEntry *BtlChar_GetVoiceEntry(s32 kind) {
-    return &gBtlChars->voiceTbl[kind];
+    return (BtlVoiceEntry *)gBtlChars->tbl[2] + kind;
 }
 
 /* Plays one of the lines of a voice kind unless the fighter is dead or the kind is cooling down. */
@@ -396,13 +418,13 @@ void BtlChar_PlayVoice(BtlCharGetChr *chr, s32 kind) {
         }
     }
     ent = BtlChar_GetVoiceEntry(kind);
-    if (ent->count >= 2) {
-        line = ent->first + BtlChar_FrameMod(ent->count - 1);
+    if (BtlVoice_Count(ent) >= 2) {
+        line = BtlVoice_First(ent) + BtlChar_FrameMod(BtlVoice_Count(ent) - 1);
         if (line >= chr->voice.last[kind]) {
             line++;
         }
     } else {
-        line = ent->first;
+        line = BtlVoice_First(ent);
     }
     if (kind < 15) {
         BtlCharSnd_PlayOwn(chr, line);
@@ -412,7 +434,7 @@ void BtlChar_PlayVoice(BtlCharGetChr *chr, s32 kind) {
         BtlObj_SetSubState(obj, 2, line);
     }
     chr->voice.last[kind] = line;
-    chr->voice.timer[kind] = ent->interval * 30.0f;
+    chr->voice.timer[kind] = BtlVoice_Interval(ent) * 30.0f;
 }
 
 /* Stops the fighter's voice while flag 0x129 is set (in mode 1 only when BtlScript_IsTextShown returns 0). */
@@ -442,7 +464,7 @@ void BtlChar_TickVoiceTimers(BtlCharGetChr *chr) {
 void BtlChar_PlayVoiceSingle(BtlCharGetChr *chr, s32 kind) {
     BtlVoiceEntry *ent = BtlChar_GetVoiceEntry(kind);
 
-    if (ent->count < 2) {
-        BtlCharSnd_StopOwn(chr, ent->first);
+    if (BtlVoice_Count(ent) < 2) {
+        BtlCharSnd_StopOwn(chr, BtlVoice_First(ent));
     }
 }

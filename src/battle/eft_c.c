@@ -119,12 +119,8 @@ typedef struct EftStageMgrView {
 } EftStageMgrView;
 extern EftStageMgrView *gBtlStage;
 
-/* Battle resources at gCommonRes + 0x20: only the stage pack. */
-typedef struct EftCommonResView {
-    /* 0x00 */ u8 unk0[0x24];
-    /* 0x24 */ s32 *stage;
-} EftCommonResView;
-#define STAGE_PACK() (((EftCommonResView *)gCommonRes)->stage)
+/* Battle resources: only the stage pack (BattleRes.stage). */
+#define STAGE_PACK() (*(s32 **)(gCommonRes->unk20 + 4))
 
 extern EftTaskClass gEftWeatherPtclClass;
 extern EftStageKind gEftStageKinds[10];

@@ -195,8 +195,8 @@ void DuelMenu_Init(s32 section) {
     MTexRes *res = NULL;
     s32 i;
 
-    DM = Heap_Alloc(0x194, 0x20, 0, 2);
-    memset(DM, 0, 0x194);
+    DM = Heap_Alloc(sizeof(*DM), 0x20, 0, 2);
+    memset(DM, 0, sizeof(*DM));
     DM->pack = (u32 *)MPACK_AT(gMenuArc5, section);
     DM->res = Sprite_Unpack(DM->pack, NULL, NULL);
     DM_RES(1);

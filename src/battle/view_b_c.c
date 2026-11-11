@@ -31,18 +31,49 @@ s32 gLipSyncWaiting = 0; /* the voice has not started playing yet */
 extern LipSync gLipSync; /* 0x31E570, .bss */
 extern MenuUtilProgress *gProgress;
 
+/* Section `n` of a lip data pack. The pack sits inside an unpacked menu pack, so its table is little-endian on
+   the PS3 (only the outer table is converted for native reads). */
+static u32 Lip_ReadOffset(const void *pack, s32 n) {
+#if defined(PORT_PS3)
+    const u8 *b = (const u8 *)pack + n * 4;
+    return (u32)b[0] | (u32)b[1] << 8 | (u32)b[2] << 16 | (u32)b[3] << 24;
+#else
+    return ((const u32 *)pack)[n];
+#endif
+}
+
+#define LIP_AT(pack, n) ((u8 *)(pack) + ((Lip_ReadOffset((pack), (n)) >> 2) << 2))
+
+/* The lip data block's numbers (key count, key frames, open flags, length) are little-endian inside the menu
+   packs, as are the pack's own offsets. */
+static s32 Lip_ReadS32(const u8 *p) {
+#if defined(PORT_PS3)
+    return (s32)((u32)p[0] | (u32)p[1] << 8 | (u32)p[2] << 16 | (u32)p[3] << 24);
+#else
+    return *(const s32 *)p;
+#endif
+}
+
+static u16 Lip_ReadU16(const u8 *p) {
+#if defined(PORT_PS3)
+    return (u16)((u16)p[0] | (u16)p[1] << 8);
+#else
+    return *(const u16 *)p;
+#endif
+}
+
 /* Plays menu voice line `base + line` (in the language of the save's bit 0) and starts its mouth movement,
    if a lip data pack is given. */
 void Voice_PlayWithSubtitle(LipPack *pack, s32 base, s32 line) {
     if (gSaveData->flags & 1) {
         Voice_Play(0, base + line + VOICE_LANG2_OFFSET, 0x80, 0);
         if (pack != NULL) {
-            LipSync_Start((u8 *)pack + ((((u32 *)pack)[line * 2 + 2] >> 2) << 2));
+            LipSync_Start(LIP_AT(pack, line * 2 + 2));
         }
     } else {
         Voice_Play(0, base + line, 0x80, 0);
         if (pack != NULL) {
-            LipSync_Start((u8 *)pack + ((((u32 *)pack)[line * 2 + 1] >> 2) << 2));
+            LipSync_Start(LIP_AT(pack, line * 2 + 1));
         }
     }
 }
@@ -87,7 +118,7 @@ s32 ChrTbl_IsRelated(s32 a, s32 b) {
         return 0;
     }
     file = (ChrTblFile *)gCommonRes->data[2];
-    table = (ChrTblEntry *)((u8 *)file + ((file->charaOffset >> 2) << 2));
+    table = (ChrTblEntry *)((u8 *)file + ((Port_ReadLe32(&file->charaOffset) >> 2) << 2));
     if (a == b) {
         return 1;
     }
@@ -288,12 +319,12 @@ void LipSync_Start(u8 *data) {
     memset(lip, 0, sizeof(LipSync));
     lip->index = 0;
     lip->active = on;
-    lip->count = Mem_ReadS32(data + 8);
+    lip->count = Lip_ReadS32(data + 8);
     data += 0x10;
     lip->keys = data;
     lip->time = 0.0f;
     data += lip->count * LIPSYNC_KEY_SIZE;
-    lip->length = Mem_ReadU16(data - LIPSYNC_KEY_SIZE);
+    lip->length = Lip_ReadU16(data - LIPSYNC_KEY_SIZE);
     gLipSyncOpen = 0;
     gLipSyncWaiting = on;
 }
@@ -320,8 +351,8 @@ void LipSync_Update(void) {
     }
     found = -1;
     for (i = gLipSync.index; i < gLipSync.count - 1; i++) {
-        if ((f32)Mem_ReadU16(gLipSync.keys + i * LIPSYNC_KEY_SIZE) <= gLipSync.time) {
-            if (gLipSync.time < (f32)Mem_ReadU16(gLipSync.keys + i * LIPSYNC_KEY_SIZE + 4)) {
+        if ((f32)Lip_ReadU16(gLipSync.keys + i * LIPSYNC_KEY_SIZE) <= gLipSync.time) {
+            if (gLipSync.time < (f32)Lip_ReadU16(gLipSync.keys + i * LIPSYNC_KEY_SIZE + 4)) {
                 found = i;
                 gLipSync.index = found;
                 break;
@@ -333,7 +364,7 @@ void LipSync_Update(void) {
         memset(lip, 0, sizeof(LipSync));
         return;
     }
-    if (Mem_ReadU16(lip->keys + found * LIPSYNC_KEY_SIZE + 2) != 0) {
+    if (Lip_ReadU16(lip->keys + found * LIPSYNC_KEY_SIZE + 2) != 0) {
         gLipSyncOpen = 1;
     }
     lip->time += 1.0f;

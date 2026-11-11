@@ -164,8 +164,8 @@ void EntrySel_Init(s32 section) {
     s32 movie;
     s32 i;
 
-    gEntrySel = Heap_Alloc(0x1C48, 0x20, 0, 2);
-    memset(gEntrySel, 0, 0x1C48);
+    gEntrySel = Heap_Alloc(sizeof(*gEntrySel), 0x20, 0, 2);
+    memset(gEntrySel, 0, sizeof(*gEntrySel));
     gEntrySel->pack = (u32 *)MPACK_AT(gMenuArc4, section);
     gEntrySel->res = Sprite_Unpack(gEntrySel->pack, NULL, NULL);
     gEntrySel->file = File_LoadSync(TOUR_PROG->t.tour + 0x3C9, NULL, 0);

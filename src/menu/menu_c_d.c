@@ -19,8 +19,8 @@ void HistSave_OnCardDone(void) {
 
 /* Loads the screen (section `section` of archive 2: only the dialog resources) and the card module. */
 void HistSave_Init(s32 section) {
-    gHistSave = Heap_Alloc(0x14, 0x20, 0, 2);
-    memset(gHistSave, 0, 0x14);
+    gHistSave = Heap_Alloc(sizeof(*gHistSave), 0x20, 0, 2);
+    memset(gHistSave, 0, sizeof(*gHistSave));
     gHistSave->pack = (u32 *)MPACK_AT(gMenuArc2, section);
     gHistSave->res = Sprite_Unpack(gHistSave->pack, NULL, NULL);
     Dialog_Init(MPACK_AT(gHistSave->res, 1), NULL, 0);

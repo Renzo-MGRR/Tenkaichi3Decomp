@@ -22,12 +22,21 @@
 
 /* ---- The Flash-like movie player (0x10D4F0.., not decompiled). Local view. ---- */
 
-/* A playing movie. */
+/* A playing movie. Kept field-for-field identical to `Flash` in sys/gfxm_c.h so that the two have the same size
+   and offsets with 4-byte AND with 8-byte pointers (the port builds these structures with the host's 8-byte
+   pointers): Flash_Create writes a whole Flash into the embedded slots. */
 typedef struct Flash {
-    /* 0x00 */ s32 unk0[3];
-    /* 0x0C */ s32 flags;   /* bit 0: a labelled animation is running (GetWin_IsAnimating) */
-    /* 0x10 */ s32 unk10[7];
-} Flash; /* size 0x2C */
+    /* 0x00 */ u8 *data;
+    /* 0x08 */ void **tex;
+    /* 0x10 */ u32 flags;   /* bit 0: a labelled animation is running (GetWin_IsAnimating) */
+    /* 0x14 */ u32 trig;
+    /* 0x18 */ u32 se;
+    /* 0x1C */ s32 speed;
+    /* 0x20 */ s32 ofs[2];
+    /* 0x28 */ void *root;
+    /* 0x30 */ void *clips;
+    /* 0x38 */ void *shapes;
+} Flash; /* 0x2C (4-byte pointers), 0x40 (8-byte pointers) */
 
 /* What Flash_FindLabel fills in: a handle to one movie clip. */
 typedef struct FlashRef {
@@ -57,7 +66,22 @@ typedef struct FlashTexRes {
 #define FLASH_TEX_SIZE 0x40
 
 /* A section of a pack file: the header word is a byte offset, rounded down to a multiple of 4. */
-#define PACK_AT(pack, n) ((void *)((u8 *)(pack) + ((((u32 *)(pack))[n] >> 2) << 2)))
+/* Reads word `n` of a pack's section table. The tables of the sections *inside* an unpacked pack (and of raw
+   pack files) are still little-endian on the PS3: only the outer table is converted for native reads. */
+static inline u32 Pack_ReadOffset(const void *pack, s32 n) {
+#if defined(PORT_PS3)
+    const u8 *b = (const u8 *)pack + n * 4;
+    return (u32)b[0] | (u32)b[1] << 8 | (u32)b[2] << 16 | (u32)b[3] << 24;
+#else
+    return ((const u32 *)pack)[n];
+#endif
+}
+
+/* Section `n` of a pack whose table is little-endian (raw files, sections of an unpacked pack). */
+#define PACK_AT(pack, n) ((void *)((u8 *)(pack) + ((Pack_ReadOffset((pack), (n)) >> 2) << 2)))
+
+/* The same for a table that File_FixPackTable / File_ConvertPackHeader already converted for native reads. */
+#define PACK_AT_BE(pack, n) ((void *)((u8 *)(pack) + ((((const u32 *)(pack))[n] >> 2) << 2)))
 
 /* ---- TextBox (view_a_f.c; the module continues after 0x2600B0) ---- */
 

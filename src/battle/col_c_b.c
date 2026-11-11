@@ -1,5 +1,6 @@
 #include "common.h"
 #include "battle/col_c.h"
+#include "sys/common.h"
 
 /*
  * Inline icon tags of the text printer: 0x23C310..0x23D1E8. A 16-bit string may contain
@@ -8,11 +9,7 @@
  * changes the text colour.
  */
 
-typedef struct FontIconCommonRes {
-    /* 0x00 */ u32 *boot; /* CommonRes.boot: word 8 is the byte offset of the icon file */
-} FontIconCommonRes;
 
-extern FontIconCommonRes *gCommonRes;
 
 extern void Res_RelocateOffsets(void *out, void *res, void *base);
 extern void TexFile_UploadAll(FontIconRes *res, s32 tbp, s32 cbp); /* uploads every texture of a file */

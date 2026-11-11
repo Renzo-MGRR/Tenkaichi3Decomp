@@ -531,6 +531,14 @@ static void labels_start(void) {
     pthread_attr_t attr;
     int started;
 
+#if defined(PORT_PS3)
+    /* The PC build makes its own font catalog and labels from the data folder in a thread. The PS3 draws the game's
+       own text, and RPCS3 crashes natively in that thread's file code: do not start it. */
+    (void)th;
+    (void)attr;
+    (void)started;
+    return;
+#endif
     if (getenv("BT3_TEST_LABELS_SLOW") == NULL &&
         (getenv("BT3_PAD_PLAY") != NULL || getenv("BT3_PAD_REC") != NULL || getenv("BT3_PAD_TABLE") != NULL || getenv("BT3_SYNCTEST") != NULL)) {
         labels_make();
@@ -1116,6 +1124,14 @@ static void item_start(void) {
     pthread_attr_t attr;
     int started;
 
+#if defined(PORT_PS3)
+    /* MenuLabels_MainItem reads archives 448/449 for a PC-only extra label; the same second-thread crash as the
+       label catalog above. Nothing on the PS3 needs it. */
+    (void)th;
+    (void)attr;
+    (void)started;
+    return;
+#endif
     if (sItem != 0 || !__sync_bool_compare_and_swap(&sItem, 0, 1)) {
         return;
     }
@@ -1132,6 +1148,15 @@ static void item_start(void) {
    address), as the item is (lit 0) or while chosen (1), into out (512 x 32 bytes, the game's): the values the sheet's
    pixels hold, each the colour of the sheet's table nearest the picture's. 0: no label from the disc. */
 int Port_MainItemLabel(int entry, int lit, int out) {
+#if defined(PORT_PS3)
+    /* The PC build writes its extra "Tenkaichi Budokai Online" label into the sheet here, made in a thread of its
+       own. The PS3 lists the game's own entries only, so there is no label to make (and RPCS3 crashes natively in
+       that thread while it reads archives 448 and 449). */
+    (void)entry;
+    (void)lit;
+    (void)out;
+    return 0;
+#else
     const uint8_t *e = (const uint8_t *)Port_Ptr((uint32_t)entry);
     const uint8_t *pic;
     uint8_t *dst = (uint8_t *)Port_Ptr((uint32_t)out);
@@ -1150,6 +1175,7 @@ int Port_MainItemLabel(int entry, int lit, int out) {
     memcpy(&clutAt, e + 0x3C, 4);
     MenuLabels_ItemPixels(pic, (const uint8_t *)Port_Ptr(clutAt) + 0x60, dst);
     return 1;
+#endif
 }
 
 /* The European disc's menu art for the chosen language, if the setup took the European disc's archives
@@ -1177,6 +1203,15 @@ static void art_start(void) {
     pthread_attr_t attr;
     int k;
 
+#if defined(PORT_PS3)
+    /* The European disc's menu art is paired in a thread of its own on the PC; the PS3 does not use it. */
+    (void)locale;
+    (void)path;
+    (void)th;
+    (void)attr;
+    (void)k;
+    return;
+#endif
     if (started || (locale = MenuTranslation_Locale()) == NULL) {
         return;
     }
@@ -1197,6 +1232,11 @@ static void art_start(void) {
 }
 
 void MenuText_Poll(void) {
+#if defined(PORT_PS3)
+    /* Every job this poll drives (label catalog, item label, European menu art) is a PC-only background thread.
+       None of them may start on the PS3: RPCS3 crashes natively in their file code. */
+    return;
+#endif
     if (__atomic_load_n(&sBootAwaitLanguage, __ATOMIC_ACQUIRE)) { return; }
     art_start();
     item_start();

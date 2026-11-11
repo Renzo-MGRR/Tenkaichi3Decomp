@@ -51,6 +51,14 @@ extern void OptMode_Main(void);
 
 #define MENU_BGM_TITLE 0x10B16
 
+#if defined(PORT_PS3)
+/* The PS3 test harness (src/sys/mcflow_a.c) reads the current screen through this: its own local view of the
+   progress block uses the PS2's 4-byte-pointer offsets, which do not hold on the PS3. */
+s32 Port_ProgressMode(void) {
+    return gProgress != NULL ? gProgress->mode : 0;
+}
+#endif
+
 #define MENU_ARC_FREE(p) \
     if ((p) != NULL) { \
         Heap_Free(p); \

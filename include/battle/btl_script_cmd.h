@@ -172,10 +172,18 @@ typedef struct BtlScriptCmdReward {
 
 /* The part of the progress struct (gProgress) the handlers touch; local view. */
 typedef struct BtlScriptCmdProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers before difficulty (see battle/view_a.h): 0x48, not 0x3C. */
+    /* 0x00 */ s32 unk0;       /* 0 / 1: picks the text file set (language) */
+    /* 0x04 */ u8 unk4[0x44];
+    /* 0x48 */ s32 difficulty; /* 1: CPU level + 6, 2: + 9 */
+    /* 0x4C */ BtlScriptCmdReward reward;
+#else
     /* 0x00 */ s32 unk0;       /* 0 / 1: picks the text file set (language) */
     /* 0x04 */ u8 unk4[0x38];
     /* 0x3C */ s32 difficulty; /* 1: CPU level + 6, 2: + 9 */
     /* 0x40 */ BtlScriptCmdReward reward;
+#endif
 } BtlScriptCmdProgress;
 
 s32 BtlScriptCmd_SetCamera(u32 phase, void *taskWork);

@@ -110,6 +110,9 @@ void MainMenu_Init(s32 section) {
     MTexRes *res = NULL;
     s32 i;
 
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: MainMenu_Init enter"); }
+#endif
     if (gMenuArc1 == NULL) {
         gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
         #if defined(PORT_PS3)
@@ -125,6 +128,9 @@ void MainMenu_Init(s32 section) {
 #endif
     gMainMenu->pack = (u32 *)MPACK_AT(gMenuArc1, section);
     gMainMenu->res = Sprite_Unpack(gMainMenu->pack, NULL, NULL);
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after Sprite_Unpack"); }
+#endif
     MM_RES(1);
     gMainMenu->bg = res;
     MM_RES(2);
@@ -200,13 +206,25 @@ void MainMenu_Init(s32 section) {
     gMainMenu->tex[36] = MTEX(res, 2);
     Flash_Create(&gMainMenu->flash[0], MPACK_AT(gMainMenu->res, 20), gMainMenu->tex);
     Flash_Play(&gMainMenu->flash[0], 1);
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after Flash_Create"); }
+#endif
     MM_RES(23);
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after MM_RES23"); }
+#endif
     IconWin_Init(MPACK_AT(gMainMenu->res, 22), res);
     IconWin_Open();
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after IconWin"); }
+#endif
     gMainMenu->msgText = MPACK_AT(gMainMenu->res, 28);
     gMainMenu->subtitles = MPACK_AT(gMainMenu->res, 27);
     MsgWin_Init(MPACK_AT(gMainMenu->res, 21), gMainMenu->msgText, 1, 0);
     MsgWin_Open();
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after MsgWin"); }
+#endif
 
     for (i = 0; i < MAINMENU_ITEM_MAX; i++) {
 #ifdef PORT
@@ -236,7 +254,7 @@ void MainMenu_Init(s32 section) {
         }
 #endif
     }
-#ifdef PORT
+#if defined(PORT) && !defined(PORT_PS3)
     /* the second sheet of each state (slot 8 not chosen, 12 chosen) is the entry behind the first */
     if (!PortMainMenu_WriteDisc(gMainMenu->tex[8] + 0x40, 3, 0) || !PortMainMenu_WriteDisc(gMainMenu->tex[12] + 0x40, 3, 1)) {
         PortMainMenu_WriteRuns(gMainMenu->tex[8] + 0x40, 3, sPortTboOff, sizeof(sPortTboOff) / sizeof(sPortTboOff[0]));
@@ -257,7 +275,17 @@ void MainMenu_Init(s32 section) {
     for (i = 0; i < 4; i++) {
         gMainMenu->blink[i] = Rand_Range(0x20);
     }
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: MainMenu_Init done"); }
+#endif
 }
+
+#if defined(PORT_PS3)
+/* The PS3 test harness (src/sys/mcflow_a.c) asks when the menu has finished opening and takes input. */
+s32 Port_MainMenuReady(void) {
+    return gMainMenu != NULL && (gMainMenu->flags & MAINMENU_GREETED) != 0;
+}
+#endif
 
 /* Frees the screen.
    The movies of a screen are an array (MainMenu_PlateGoto takes the index) of ONE, and Term / Update / Draw

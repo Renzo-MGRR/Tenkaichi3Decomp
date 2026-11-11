@@ -6,6 +6,9 @@
 extern void Port_MenuPage(int screen); /* port/src/gs_marker.c: widescreen menus */
 extern void Port_MenuFill(int on);
 #endif
+#if defined(PORT_PS3)
+extern void File_SwapWordsLe(void *start, void *end); /* sys/file.c: little-endian table -> host order */
+#endif
 
 ModeMenu *gModeMenu = NULL; /* 0x3B12F0 */
 
@@ -124,8 +127,8 @@ void ModeMenu_Init(s32 section) {
     MTexRes *res = NULL;
     s32 i;
 
-    gModeMenu = Heap_Alloc(0x33C, 0x20, 0, 2);
-    memset(gModeMenu, 0, 0x33C);
+    gModeMenu = Heap_Alloc(sizeof(*gModeMenu), 0x20, 0, 2);
+    memset(gModeMenu, 0, sizeof(*gModeMenu));
     gModeMenu->pack = (u32 *)MPACK_AT(gMenuArc2, section);
     gModeMenu->res = Sprite_Unpack(gModeMenu->pack, NULL, NULL);
     gModeMenu->file = File_LoadSync(gProgress->baseFile + gProgress->subMenu + 0x10, NULL, 0);
@@ -222,6 +225,11 @@ void ModeMenu_Init(s32 section) {
         gModeMenu->items[gModeMenu->itemCount++] = gModeMenu->itemMax;
     }
     gModeMenu->descr = (ModeMenuDescr *)MPACK_AT(gModeMenu->fileRes, 6);
+#if defined(PORT_PS3)
+    /* The records are little-endian in the pack; the count/line/delay fields are read as native s32. */
+    File_SwapWordsLe(gModeMenu->descr,
+                     (u8 *)gModeMenu->descr + (gModeMenu->itemMax + 1) * (s32)sizeof(ModeMenuDescr));
+#endif
     if (gProgress->subMenu == 7) {
         gModeMenu->descr->count = 2;
     }
@@ -250,6 +258,16 @@ void ModeMenu_Init(s32 section) {
         TextBox_SetUnk50(&gModeMenu->box[i], 1);
         TextBox_SetRect(&gModeMenu->box[i], 0, 0x200, 0, 0x1A1);
     }
+#if defined(PORT_PS3)
+    {
+        extern void Port_StageTracePtr(const char *what, const void *ptr);
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTracePtr("ModeMenu_Init: descr", gModeMenu->descr);
+        Port_StageTraceInt("ModeMenu_Init: itemCount", gModeMenu->itemCount);
+        Port_StageTraceInt("ModeMenu_Init: item0", gModeMenu->items[0]);
+        Port_StageTraceInt("ModeMenu_Init: cursor0", gModeMenu->cursor[0]);
+    }
+#endif
 
     switch (gProgress->subMenu) {
     case 0:
@@ -657,6 +675,20 @@ s32 ModeMenu_Run(s32 section) {
         Pad_Update();
         Snd_Update();
         ColorFade_Update();
+#if defined(PORT_PS3)
+        {
+            static s32 sLastStep = -1;
+            static s32 sLastFocus = -1;
+            extern void Port_StageTraceInt(const char *what, long value);
+            if (gModeMenu->step != sLastStep || gModeMenu->focus != sLastFocus) {
+                sLastStep = gModeMenu->step;
+                sLastFocus = gModeMenu->focus;
+                Port_StageTraceInt("ModeMenu: step", gModeMenu->step);
+                Port_StageTraceInt("ModeMenu: focus", gModeMenu->focus);
+                Port_StageTraceInt("ModeMenu: flags", (long)gModeMenu->flags);
+            }
+        }
+#endif
         if (!(gProgress->flags & MPROG_FREEZE)) {
             ModeMenu_Update();
             ModeMenu_UpdateStep();

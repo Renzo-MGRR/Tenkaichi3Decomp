@@ -286,7 +286,7 @@ void BtlScript_RequestTextFile(s32 id) {
 void *BtlScript_GetText(s32 n) {
     u32 *file = gBtlScript.textFile;
 
-    return (u8 *)file + (file[n + 1] / 4) * 4;
+    return (u8 *)file + (Port_ReadLe32(&file[n + 1]) / 4) * 4;
 }
 
 /* Queues the read of the second file. */
@@ -298,7 +298,7 @@ void BtlScript_RequestFile8(s32 id) {
 void *BtlScript_GetFile8Entry(s32 n) {
     u32 *file = gBtlScript.file8;
 
-    return (u8 *)file + (file[n + 1] / 4) * 4;
+    return (u8 *)file + (Port_ReadLe32(&file[n + 1]) / 4) * 4;
 }
 
 /* Returns text window n. */

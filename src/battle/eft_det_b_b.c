@@ -19,13 +19,8 @@ extern f32 Vec3_Length(StgColVec *v);
 extern s32 BtlStage_IsReady(void);
 extern s32 Battle_GetStage(void);
 
-/* gCommonRes + 0x24: the loaded stage file (a pack whose header is a table of byte offsets). */
-typedef struct StgNavRes {
-    /* 0x00 */ u8 unk0[0x24];
-    /* 0x24 */ u32 *stageFile;
-} StgNavRes;
-
-#define STGNAV_RES ((StgNavRes *)gCommonRes)
+/* The loaded stage file (a pack whose header is a table of byte offsets): BattleRes.stage. */
+#define STGNAV_STAGE (*(u32 **)(gCommonRes->unk20 + 4))
 
 /* The graph is bound and the stage can be queried. */
 s32 StgNav_IsReady(void) {
@@ -49,9 +44,9 @@ s32 StgNav_Bind(void) {
     if (gStgNav->ready == 1) {
         return -1;
     }
-    file = STGNAV_RES->stageFile;
-    start = file[0x10];
-    end = file[0x11];
+    file = STGNAV_STAGE;
+    start = Port_ReadLe32(&file[0x10]);
+    end = Port_ReadLe32(&file[0x11]);
     data = (StgNavData *)&file[start / 4];
     if (end == start) {
         return -2;

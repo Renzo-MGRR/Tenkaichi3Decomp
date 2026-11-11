@@ -18,8 +18,8 @@ ModeBg *gModeBg = NULL; /* 0x3B12F4 */
 void ModeBg_Init(u32 *pack) {
     MTexRes *res = NULL;
 
-    gModeBg = Heap_Alloc(0x78, 0x20, 0, 2);
-    memset(gModeBg, 0, 0x78);
+    gModeBg = Heap_Alloc(sizeof(*gModeBg), 0x20, 0, 2);
+    memset(gModeBg, 0, sizeof(*gModeBg));
     res = (MTexRes *)MPACK_AT(pack, 1);
     Res_RelocateOffsets(&res, res, res);
     gModeBg->bg = res;

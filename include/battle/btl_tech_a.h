@@ -245,8 +245,14 @@ typedef struct BtlTechWork5A8 {
 
 /* gProgress: only the field read here. */
 typedef struct BtlTechProgress {
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers before this field (see battle/view_a.h): 0x800, not 0x7F4. */
+    /* 0x000 */ u8 unk0[0x800];
+    /* 0x800 */ s32 unk7F4;
+#else
     /* 0x000 */ u8 unk0[0x7F4];
     /* 0x7F4 */ s32 unk7F4;
+#endif
 } BtlTechProgress;
 
 /* by side */

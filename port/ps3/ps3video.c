@@ -117,7 +117,7 @@ void Port_Ps3VideoPresent(const uint8_t *rgb, uint32_t width, uint32_t height) {
     if (rgb == NULL || width == 0 || height == 0) return;
     sPresentCount++;
     /* First the boot popup and logos every other frame, then (for the menu) one in ten. */
-    if (sPresentCount >= 40 && sDumpCount < 96 && width <= 680 &&
+    if (sPresentCount >= 40 && sDumpCount < 300 && width <= 680 &&
         ((sDumpCount < 48 && (sPresentCount % 2) == 0) || (sDumpCount >= 48 && (sPresentCount % 10) == 0))) {
         /* Debug: the raw software-GS frame, one BMP per presented frame. */
         char path[128];

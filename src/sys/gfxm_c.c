@@ -2022,6 +2022,13 @@ void FlashClipList_FindRef(FlashClipList *list, char *parent, char *name, FlashR
     FlashClip *clip;
 
     memset(out, 0, sizeof(FlashRef));
+#if defined(PORT_PS3)
+    if (list == NULL || (list->items == NULL && list->count != 0)) {
+        /* A movie whose sprite list could not be built: report "no such clip" instead of walking a NULL array. */
+        out->index = -1;
+        return;
+    }
+#endif
     if (parent != NULL) {
         clip = list->items;
         for (i = 0; i < list->count; i++, clip++) {

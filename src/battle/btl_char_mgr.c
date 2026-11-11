@@ -244,7 +244,7 @@ extern void BtlObj_UpdateChains(BtlMgrObj *obj);
 #define OBJ_WORD_18028(obj) (*(s32 *)((obj)->unk1660 + 0x18028))
 
 /* A table inside a data file: the header word gives its byte offset. */
-#define FILE_TABLE(file, word) ((u32 *)(file) + ((u32 *)(file))[word] / 4)
+#define FILE_TABLE(file, word) ((u32 *)(file) + Port_ReadLe32((const u8 *)(file) + (word) * 4) / 4)
 
 /* Binds the fighter to its side's object and clears the state that belongs to the old object. */
 void BtlChar_BindObject(BtlMgrChr *chr) {
@@ -1289,8 +1289,8 @@ void BtlChar_EndFrame(BtlMgrChr *chr) {
 void BtlChar_AllocAll(s32 count) {
     gBtlChars = Heap_Alloc(sizeof(BtlCharMgr), 0x20, 0, HEAP_ANY);
     memset(gBtlChars, 0, sizeof(BtlCharMgr));
-    gBtlChars->chars = Heap_Alloc(count * 0x1600, 0x20, 0, HEAP_ANY);
-    memset(gBtlChars->chars, 0, count * 0x1600);
+    gBtlChars->chars = Heap_Alloc(count * sizeof(BtlMgrChr), 0x20, 0, HEAP_ANY);
+    memset(gBtlChars->chars, 0, count * sizeof(BtlMgrChr));
     gBtlChars->unk8 = Heap_Alloc(count * 0x34, 0x20, 0, HEAP_ANY);
     memset(gBtlChars->unk8, 0, count * 0x34);
     gBtlChars->unkC = Heap_Alloc(count * 0x34, 0x20, 0, HEAP_ANY);
@@ -1351,7 +1351,7 @@ void BtlChar_ResetAll(void) {
     memset(gBtlChars->unk138, 0, 0x140);
     memset(gBtlChars->unk40, 0, 0x60);
     gBtlChars->unk130 = 0;
-    memset(gBtlChars->chars, 0, BtlChar_GetCount() * 0x1600);
+    memset(gBtlChars->chars, 0, BtlChar_GetCount() * sizeof(BtlMgrChr));
     BtlChange_Reset();
     BtlReplay_ResetViewer();
     for (i = 0; i < BtlChar_GetCount(); i++) {

@@ -387,8 +387,8 @@ void CharSel_Init(s32 section) {
     s32 stageRows;
     void *data;
 
-    gCharSel = Heap_Alloc(0x3A4C, 0x20, 0, 2);
-    memset(gCharSel, 0, 0x3A4C);
+    gCharSel = Heap_Alloc(sizeof(*gCharSel), 0x20, 0, 2);
+    memset(gCharSel, 0, sizeof(*gCharSel));
     if (gProgress->mode == 0x2D) {
         gCharSel->pack = (u32 *)MPACK_AT(gMenuArc6, section);
         gCharSel->res = Sprite_Unpack(gCharSel->pack, NULL, NULL);

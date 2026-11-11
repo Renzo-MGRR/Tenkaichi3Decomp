@@ -47,8 +47,8 @@ void CharRef_Init(s32 section) {
     s32 *table;
     s32 i;
 
-    gCharRef = Heap_Alloc(0x1638, 0x20, 0, 2);
-    memset(gCharRef, 0, 0x1638);
+    gCharRef = Heap_Alloc(sizeof(*gCharRef), 0x20, 0, 2);
+    memset(gCharRef, 0, sizeof(*gCharRef));
     gCharRef->pack = (u32 *)MPACK_AT(gMenuArc9, section);
     gCharRef->res = Sprite_Unpack(gCharRef->pack, NULL, NULL);
     CR_RES(15);

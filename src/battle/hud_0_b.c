@@ -1,5 +1,6 @@
 #include "common.h"
 #include "battle/hud_0.h"
+#include "sys/common.h"
 #include "sys/pad.h"
 #include "sys/heap.h"
 
@@ -34,7 +35,6 @@
  */
 
 extern BtlMenuWork *gBtlMenu;
-extern void *gCommonRes;
 
 extern void *memset(void *dst, s32 c, u32 n);
 extern u64 *Dma_BeginDirect(void);
@@ -224,9 +224,9 @@ s32 BtlMenu_IsControls(BtlMenu *menu) {
 
 /* String n of the common file's offset table. */
 u16 *BtlMenu_GetText(s32 n) {
-    u32 *file = *(u32 **)((u8 *)gCommonRes + 0x28);
+    u32 *file = *(u32 **)(gCommonRes->unk20 + 8);
 
-    return (u16 *)(file + file[n] / 4);
+    return (u16 *)(file + Port_ReadLe32(&file[n]) / 4);
 }
 
 /* Text of a menu item. */
@@ -610,11 +610,11 @@ void BtlMenu_ClearActive(void) {
 void BtlMenu_Init(void) {
     u32 *file;
 
-    gBtlMenu = Heap_Alloc(0x120, 0x20, 0, 2);
-    memset(gBtlMenu, 0, 0x120);
+    gBtlMenu = Heap_Alloc(sizeof(*gBtlMenu), 0x20, 0, 2);
+    memset(gBtlMenu, 0, sizeof(*gBtlMenu));
     BtlMenu_SetActive();
-    file = *(u32 **)((u8 *)gCommonRes + 0x28);
-    gBtlMenu->tex = (BtlMenuTexFile *)(file + file[7] / 4);
+    file = *(u32 **)(gCommonRes->unk20 + 8);
+    gBtlMenu->tex = (BtlMenuTexFile *)(file + Port_ReadLe32(&file[7]) / 4);
     Res_RelocateOffsets(&gBtlMenu->tex, gBtlMenu->tex, gBtlMenu->tex);
 }
 

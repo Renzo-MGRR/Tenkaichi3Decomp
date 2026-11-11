@@ -129,7 +129,7 @@ void BtlAiMgr_ResetSide(s32 side) {
 /* Allocates the manager block if needed and resets it. */
 void BtlAiMgr_Init(void) {
     if (gBtlAi == NULL) {
-        memset(gBtlAi = Heap_Alloc(0xA60, 0x20, 0, 2), 0, 0xA60);
+        memset(gBtlAi = Heap_Alloc(sizeof(*gBtlAi), 0x20, 0, 2), 0, sizeof(*gBtlAi));
     }
     BtlAiMgr_Reset();
 }

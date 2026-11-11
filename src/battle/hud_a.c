@@ -1,6 +1,7 @@
 #include "common.h"
 #include "battle/hud_a.h"
 #include "battle/battle.h"
+#include "sys/common.h"
 #include "sys/heap.h"
 
 /*
@@ -11,14 +12,6 @@
  */
 
 typedef f32 HudMtx[4][4];
-
-/* Local view of gCommonRes: the word at +0x28 is the file that holds the five HUD sprite sheets. */
-typedef struct HudCommonRes {
-    /* 0x00 */ u8 unk0[0x28];
-    /* 0x28 */ u32 *hudFile; /* [1], [2], [3], [4], [5]: byte offsets of the sheets */
-} HudCommonRes;
-
-extern HudCommonRes *gCommonRes;
 
 /* The manager; NULL outside a battle. Defined here: this object's .sdata (0x2FEB3C). */
 Hud *gHud = NULL;
@@ -307,16 +300,16 @@ void Hud_Init(void) {
 
     gHud = Heap_Alloc(sizeof(Hud), 0x20, 0, 2);
     memset(gHud, 0, sizeof(Hud));
-    file = gCommonRes->hudFile;
-    gHud->res[0] = (HudRes *)((u8 *)file + ((file[1] >> 2) << 2));
+    file = *(u32 **)(gCommonRes->unk20 + 8);
+    gHud->res[0] = (HudRes *)((u8 *)file + ((Port_ReadLe32(&file[1]) >> 2) << 2));
     Res_RelocateOffsets(&gHud->res[0], gHud->res[0], gHud->res[0]);
-    gHud->res[3] = (HudRes *)((u8 *)file + ((file[2] >> 2) << 2));
+    gHud->res[3] = (HudRes *)((u8 *)file + ((Port_ReadLe32(&file[2]) >> 2) << 2));
     Res_RelocateOffsets(&gHud->res[3], gHud->res[3], gHud->res[3]);
-    gHud->res[1] = (HudRes *)((u8 *)file + ((file[4] >> 2) << 2));
+    gHud->res[1] = (HudRes *)((u8 *)file + ((Port_ReadLe32(&file[4]) >> 2) << 2));
     Res_RelocateOffsets(&gHud->res[1], gHud->res[1], gHud->res[1]);
-    gHud->res[2] = (HudRes *)((u8 *)file + ((file[5] >> 2) << 2));
+    gHud->res[2] = (HudRes *)((u8 *)file + ((Port_ReadLe32(&file[5]) >> 2) << 2));
     Res_RelocateOffsets(&gHud->res[2], gHud->res[2], gHud->res[2]);
-    gHud->res[4] = (HudRes *)((u8 *)file + ((file[3] >> 2) << 2));
+    gHud->res[4] = (HudRes *)((u8 *)file + ((Port_ReadLe32(&file[3]) >> 2) << 2));
     Res_RelocateOffsets(&gHud->res[4], gHud->res[4], gHud->res[4]);
     HudGauge_Init(&gHud->gauge, gHud->res[0]);
     HudTimer_Init(&gHud->timer, gHud->res[0]);

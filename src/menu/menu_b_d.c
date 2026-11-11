@@ -145,8 +145,8 @@ void HistSel_Init(s32 section) {
     s32 j;
     s32 cleared;
 
-    gHistSel = Heap_Alloc(0x254, 0x20, 0, 2);
-    memset(gHistSel, 0, 0x254);
+    gHistSel = Heap_Alloc(sizeof(*gHistSel), 0x20, 0, 2);
+    memset(gHistSel, 0, sizeof(*gHistSel));
     gHistSel->pack = (u32 *)MPACK_AT(gMenuArc2, section);
     gHistSel->res = Sprite_Unpack(gHistSel->pack, NULL, NULL);
     StreamSe_PlayDefault(0, 0x10BDB);

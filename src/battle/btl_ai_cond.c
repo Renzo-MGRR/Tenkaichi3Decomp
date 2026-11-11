@@ -165,7 +165,7 @@ s32 BtlAiCond_SeqFlag2(BtlAiWork *ai, u8 arg) {
     if (seq->depth == 0) {
         return 0;
     }
-    return ((act->seqFlags[SEQ_TOP(seq).id] >> 2) & 1) == arg;
+    return ((Port_ReadLe16(&act->seqFlags[SEQ_TOP(seq).id]) >> 2) & 1) == arg;
 }
 
 /* Condition 19: level below -1. */
@@ -2064,29 +2064,32 @@ void AiThink_EvalRules(AiThWork *ai, AiThRuleList *list) {
     s32 pass;
     s32 range;
 
-    for (n = 0; n < list->count; n++) {
+    for (n = 0; n < (s16)Port_ReadLe16(&list->count); n++) {
+        s32 group;
+
         plan->ruleNo = n;
         rule = &list->rules[n];
-        if (skipGroup == rule->group) {
+        group = (s16)Port_ReadLe16(&rule->group);
+        if (skipGroup == group) {
             continue;
         }
-        if (!((st->flags >> rule->group) & 1)) {
+        if (!((st->flags >> group) & 1)) {
             continue;
         }
-        plan->cls = AiThink_GetGroupClass(rule->group);
-        if (rule->group == 0x1D) {
+        plan->cls = AiThink_GetGroupClass(group);
+        if (group == 0x1D) {
             plan->sub = 0;
-        } else if (rule->group == 0x24) {
+        } else if (group == 0x24) {
             plan->sub = 1;
-        } else if (rule->group == 0x26) {
+        } else if (group == 0x26) {
             plan->sub = 2;
-        } else if (rule->group == 0x25) {
+        } else if (group == 0x25) {
             plan->sub = 3;
         }
-        if (lastGroup != rule->group) {
-            if (rule->group == 0x1D || rule->group == 0x24 || rule->group == 0x25) {
+        if (lastGroup != group) {
+            if (group == 0x1D || group == 0x24 || group == 0x25) {
                 if (AiThink_RollGroupGate(ai) != 0) {
-                    skipGroup = rule->group;
+                    skipGroup = group;
                     continue;
                 }
             }
@@ -2111,7 +2114,7 @@ void AiThink_EvalRules(AiThWork *ai, AiThRuleList *list) {
                 r->acc = 0;
             }
         }
-        lastGroup = rule->group;
+        lastGroup = group;
         pass = 0;
         for (i = 0; i < 8; i++) {
             if (rule->cond[i] == AITH_COND_SAME) {
@@ -2144,7 +2147,7 @@ void AiThink_EvalRules(AiThWork *ai, AiThRuleList *list) {
             s32 next = rule->param - 0x7F;
 
             plan->next = next;
-            plan->unkAA = rule->group;
+            plan->unkAA = group;
             if (cls == 14) {
                 return;
             }
@@ -2152,15 +2155,15 @@ void AiThink_EvalRules(AiThWork *ai, AiThRuleList *list) {
             plan->clsCount[plan->cls]++;
             return;
         }
-        if (rule->group == 0x24) {
+        if (group == 0x24) {
             BtlAi_NoteOpponent(ai, 0x800);
-        } else if (rule->group == 0x25) {
+        } else if (group == 0x25) {
             BtlAi_NoteOpponent(ai, 0x1000);
-        } else if (rule->group == 0x26) {
+        } else if (group == 0x26) {
             BtlAi_NoteOpponent(ai, 0x2000);
         }
         seq->firedRule = n;
-        seq->firedGroup = rule->group;
+        seq->firedGroup = group;
         seq->firedSet = seq->ruleSet;
         BtlAiSeq_PushRule(ai, rule);
         return;
@@ -2239,7 +2242,7 @@ void AiThink_BindData(s32 owned) {
     if (owned != 1) {
         u32 *file = gCommonRes->data[0];
 
-        p = (u8 *)file + ((file[4] >> 2) << 2);
+        p = (u8 *)file + ((Port_ReadLe32(&file[4]) >> 2) << 2);
     }
     if (p == NULL) {
         return;
@@ -2250,18 +2253,18 @@ void AiThink_BindData(s32 owned) {
     p = (u8 *)data + 0x148;
     data->act = (AiThActTable *)p;
     ((AiThActTable *)p)->unk4 = (u8 *)data + 0x8D0;
-    p += data->size[0];
+    p += Port_ReadLeS32(&data->size[0]);
     for (i = 0; i < 8; i++) {
         data->rules[i] = (AiThRuleList *)p;
         ((AiThRuleList *)p)->rules = (AiThRule *)(p + 8);
-        p += data->size[1 + i];
+        p += Port_ReadLeS32(&data->size[1 + i]);
     }
     for (i = 0; i < 32; i++) {
         data->profile[i] = p;
-        if (data->size[9 + i] == 0) {
+        if (Port_ReadLeS32(&data->size[9 + i]) == 0) {
             data->profile[i] = NULL;
         }
-        p += data->size[9 + i];
+        p += Port_ReadLeS32(&data->size[9 + i]);
     }
     gBtlAi->data = data;
     if (owned == 1) {

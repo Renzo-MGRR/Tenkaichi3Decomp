@@ -143,7 +143,30 @@ HeapBlock *Heap_SearchFromHead(s32 size, s32 heap) {
 HeapBlock *Heap_FindFreeFromHead(s32 heap, s32 size) {
     HeapBlock *found = NULL;
     HeapBlock *block;
+#if defined(PORT_PS3)
+    HeapBlock *start = Heap_DecodeBlock(gHeapStart[heap]);
+    HeapBlock *end = Heap_DecodeBlock(gHeapEnd[heap]);
 
+    for (block = start; block != NULL; block = Heap_NextBlock(block)) {
+        if ((u8 *)block < (u8 *)start || (u8 *)block + sizeof(HeapBlock) > (u8 *)end) {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Heap: wild block", (long)(u32)Port_Addr(block));
+            break;
+        }
+        if (block->magic != HEAP_MAGIC) {
+            extern void Port_StageTraceInt(const char *what, long value);
+            Port_StageTraceInt("Heap: bad magic at", (long)(u32)Port_Addr(block));
+            Port_StageTraceInt("Heap: bad magic", (long)block->magic);
+            Port_StageTraceInt("Heap: bad size", block->size);
+            break;
+        }
+        if (block->used == 0 && block->size >= size) {
+            found = block;
+            break;
+        }
+    }
+    return found;
+#else
     for (block = Heap_DecodeBlock(gHeapStart[heap]); block != NULL; block = Heap_NextBlock(block)) {
         if (block->used == 0 && block->size >= size) {
             found = block;
@@ -151,6 +174,7 @@ HeapBlock *Heap_FindFreeFromHead(s32 heap, s32 size) {
         }
     }
     return found;
+#endif
 }
 
 HeapBlock *Heap_FindFreeFromTail(s32 heap, s32 size);
@@ -274,6 +298,17 @@ void *Heap_Alloc(s32 size, u32 align, s32 fromTail, s32 heap) {
         data = (void *)block->data;
 #endif
     }
+#if defined(PORT_PS3)
+    if (size > 0x100000) {
+        extern void Port_StageTraceInt(const char *what, long value);
+        Port_StageTraceInt("Heap_Alloc: size", size);
+        Port_StageTraceInt("Heap_Alloc: blockAddr", block != NULL ? (long)Port_Addr(block) : -1);
+        Port_StageTraceInt("Heap_Alloc: blockData", block != NULL ? (long)block->data : -1);
+        Port_StageTraceInt("Heap_Alloc: retAddr", data != NULL ? (long)Port_Addr(data) : -1);
+        Port_StageTraceInt("Heap_Alloc: heap0", (long)(u32)(uintptr_t)gHeapStart[0]);
+        Port_StageTraceInt("Heap_Alloc: heap0end", (long)(u32)(uintptr_t)gHeapEnd[0]);
+    }
+#endif
     return data;
 }
 
@@ -386,6 +421,62 @@ HeapBlock *Heap_GetEnd(s32 heap) {
 s32 Heap_GetSize(s32 heap) {
     return gHeapSize[heap];
 }
+
+#if defined(PORT_PS3)
+/* Test harness: walks heap 0 and reports the first block whose header does not look like a live block. */
+void Port_HeapCheck(const char *where) {
+    extern void Port_StageTrace(const char *what);
+    extern void Port_StageTraceInt(const char *what, long value);
+    HeapBlock *start = Heap_DecodeBlock(gHeapStart[0]);
+    HeapBlock *end = Heap_DecodeBlock(gHeapEnd[0]);
+    HeapBlock *block = start;
+    HeapBlock *prev = NULL;
+    long n = 0;
+    long freeSize = 0;
+
+    Port_StageTrace(where);
+    while (block != NULL && block != end) {
+        if ((u8 *)block < (u8 *)start || (u8 *)block + sizeof(HeapBlock) > (u8 *)end) {
+            Port_StageTraceInt("HeapCheck: outside at", (long)(u32)Port_Addr(block));
+            if (prev != NULL) {
+                Port_StageTraceInt("HeapCheck: after block", (long)(u32)Port_Addr(prev));
+                Port_StageTraceInt("HeapCheck: prev used", prev->used);
+                Port_StageTraceInt("HeapCheck: prev size", prev->size);
+                Port_StageTraceInt("HeapCheck: prev dataSize", prev->dataSize);
+            }
+            return;
+        }
+        if (block->magic != HEAP_MAGIC) {
+            Port_StageTraceInt("HeapCheck: bad magic at", (long)(u32)Port_Addr(block));
+            Port_StageTraceInt("HeapCheck: magic", (long)block->magic);
+            Port_StageTraceInt("HeapCheck: used", block->used);
+            Port_StageTraceInt("HeapCheck: size", block->size);
+            if (prev != NULL) {
+                Port_StageTraceInt("HeapCheck: after block", (long)(u32)Port_Addr(prev));
+                Port_StageTraceInt("HeapCheck: prev used", prev->used);
+                Port_StageTraceInt("HeapCheck: prev size", prev->size);
+                Port_StageTraceInt("HeapCheck: prev dataSize", prev->dataSize);
+            }
+            return;
+        }
+        if (block->size <= 0 || (u8 *)block + block->size > (u8 *)end) {
+            Port_StageTraceInt("HeapCheck: bad size at", (long)(u32)Port_Addr(block));
+            Port_StageTraceInt("HeapCheck: used", block->used);
+            Port_StageTraceInt("HeapCheck: size", block->size);
+            Port_StageTraceInt("HeapCheck: dataSize", block->dataSize);
+            return;
+        }
+        if (block->used == 0) {
+            freeSize += block->dataSize;
+        }
+        prev = block;
+        block = (HeapBlock *)((u8 *)block + block->size);
+        n++;
+    }
+    Port_StageTraceInt("HeapCheck: blocks", n);
+    Port_StageTraceInt("HeapCheck: free", freeSize);
+}
+#endif
 
 s32 Heap_GetUnk70(s32 heap) {
     return gHeapUnk70[heap];

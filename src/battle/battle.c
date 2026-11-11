@@ -149,9 +149,15 @@ s32 Battle_Restart(void) {
 /* Loads the battle data, creates every battle subsystem, then starts the first match. */
 s32 Battle_Init(void) {
     Battle_Load();
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after Battle_Load"); }
+#endif
     StgFx_Init();
     StgModel_InitStage();
     BtlChar_AllocAll(2);
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after BtlChar_AllocAll"); }
+#endif
     BtlAiMgr_Init();
     BtlCam_Init();
     StgNav_Init();

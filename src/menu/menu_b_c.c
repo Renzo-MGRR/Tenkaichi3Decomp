@@ -6,6 +6,9 @@
 extern void Port_MenuPage(int screen); /* port/src/gs_marker.c: widescreen menus */
 extern void Port_MenuFill(int on);
 #endif
+#if defined(PORT_PS3)
+extern void File_SwapWordsLe(void *start, void *end); /* sys/file.c: little-endian table -> host order */
+#endif
 
 HistOutro *gHistOutro = NULL; /* 0x3B12F8 */
 
@@ -77,8 +80,8 @@ void HistOutro_Init(s32 section) {
     s32 i;
     SaveSlot *slot;
 
-    gHistOutro = Heap_Alloc(0x2C0, 0x20, 0, 2);
-    memset(gHistOutro, 0, 0x2C0);
+    gHistOutro = Heap_Alloc(sizeof(*gHistOutro), 0x20, 0, 2);
+    memset(gHistOutro, 0, sizeof(*gHistOutro));
     gHistOutro->pack = (u32 *)MPACK_AT(gMenuArc2, section);
     gHistOutro->res = Sprite_Unpack(gHistOutro->pack, NULL, NULL);
     switch (gProgress->subMenu) {
@@ -182,6 +185,11 @@ void HistOutro_Init(s32 section) {
     MsgWin_Init(MPACK_AT(gHistOutro->res, 8), gHistOutro->msgText, 1, 0);
     gHistOutro->text = MPACK_AT(gHistOutro->res, 6);
     gHistOutro->descr = (ModeMenuDescr *)MPACK_AT(gHistOutro->fileRes, 6);
+#if defined(PORT_PS3)
+    /* The records are little-endian in the pack; the count/line/delay fields are read as native s32. */
+    File_SwapWordsLe(gHistOutro->descr,
+                     (u8 *)gHistOutro->descr + (gHistOutro->itemMax + 1) * (s32)sizeof(ModeMenuDescr));
+#endif
     gHistOutro->voiceLine = -1;
     for (i = 0; i < 2; i++) {
         gHistOutro->blink[i] = Rand_Range(0x20);

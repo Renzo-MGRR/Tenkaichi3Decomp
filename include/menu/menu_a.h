@@ -16,15 +16,21 @@
 
 /* ---- Local views of main-executable types (the two Flash headers under include/ conflict). ---- */
 
-/* A movie instance (include/sys/gfxm_c.h has the full layout). */
+/* A movie instance (include/sys/gfxm_c.h has the full layout). Kept field-for-field identical to `Flash` so that the
+   two have the same size and offsets with 4-byte AND with 8-byte pointers (the port builds the game's structures with
+   the host's 8-byte pointers): Flash_Create writes a whole Flash into these slots. */
 typedef struct MFlash {
     /* 0x00 */ u8 *data;
-    /* 0x04 */ void **tex;
-    /* 0x08 */ u32 flags;    /* MFLASH_ */
-    /* 0x0C */ u32 trig;
-    /* 0x10 */ u32 se;       /* bit n: the movie asked for sound n this tick */
-    /* 0x14 */ s32 unk14[6];
-} MFlash; /* 0x2C */
+    /* 0x08 */ void **tex;
+    /* 0x10 */ u32 flags;    /* MFLASH_ */
+    /* 0x14 */ u32 trig;
+    /* 0x18 */ u32 se;       /* bit n: the movie asked for sound n this tick */
+    /* 0x1C */ s32 speed;    /* frames per Flash_Advance */
+    /* 0x20 */ s32 ofs[2];   /* screen offset added to every quad */
+    /* 0x28 */ void *root;
+    /* 0x30 */ void *clips;
+    /* 0x38 */ void *shapes;
+} MFlash; /* 0x2C (4-byte pointers), 0x40 (8-byte pointers) */
 
 #define MFLASH_PAD 2         /* the movie's timeline says input is accepted ("pad" "true") */
 
@@ -261,9 +267,25 @@ extern Title *gTitle;       /* 0x3B0EB8 */
 
 /* ---- ModeMenu (menu_a_d.c): the sub menu of one game mode, with a guide character and a large picture ---- */
 
-/* A text box of the main executable (include/battle/view_a.h has the layout). */
+/* A text box of the main executable (include/battle/view_a.h has the layout). Kept field-for-field identical to
+   `TextBox` so that the two have the same size and offsets with 4-byte AND with 8-byte pointers: TextBox_Init
+   memsets a whole TextBox into these slots, so a fixed PS2-sized mirror would run into the field after them
+   (ModeMenu.box[2] ran into ModeMenu.descr on the PS3, which then read address 0). */
 typedef struct MTextBox {
-    u8 unk0[0x8C];
+    /* 0x00 */ s32 flags;
+    /* 0x04 */ void *text;
+    /* 0x08 */ s32 unk8;
+    /* 0x0C */ s32 unkC;
+    /* 0x10 */ s32 unk10;
+    /* 0x14 */ u8 unk14[0x1C];
+    /* 0x30 */ u8 color[4];
+    /* 0x34 */ u8 color2[4];
+    /* 0x38 */ s32 rect[4];
+    /* 0x48 */ u8 unk48[8];
+    /* 0x50 */ s32 unk50;
+    /* 0x54 */ u8 unk54[0x2C];
+    /* 0x80 */ s32 unk80;
+    /* 0x84 */ u8 unk84[8];
 } MTextBox;
 
 /* The work struct (ModeMenu) and its item table are in include/menu/menu_b.h (the object was first decompiled in

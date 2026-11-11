@@ -146,8 +146,8 @@ void SoloSel_Init(s32 section) {
     MTexRes *res = NULL;
     s32 i;
 
-    gSoloSel = Heap_Alloc(0x1AA4, 0x20, 0, 2);
-    memset(gSoloSel, 0, 0x1AA4);
+    gSoloSel = Heap_Alloc(sizeof(*gSoloSel), 0x20, 0, 2);
+    memset(gSoloSel, 0, sizeof(*gSoloSel));
     gSoloSel->pack = (u32 *)MPACK_AT(gMenuArc3, section);
     gSoloSel->res = Sprite_Unpack(gSoloSel->pack, NULL, NULL);
     if (gProgress->mode == 21) {

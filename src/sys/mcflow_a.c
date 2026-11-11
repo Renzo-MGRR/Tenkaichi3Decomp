@@ -19,12 +19,25 @@ typedef struct McFlowSlotInfo {
 typedef struct McFlowProgress {
     /* 0x000 */ s32 unk0;
     /* 0x004 */ s32 fileBase;    /* first id of the common files */
+#if defined(PORT)
+    /* The host's ViewProgress has three 8-byte pointers after fileBase: flags is at 0x20, not 0x14, and the
+       replay slot list starts at 0x6A8, not 0x69C (sizeof(ViewProgress) is 0x808, not 0x7FC). */
+    /* 0x008 */ void *loadPack;
+    /* 0x010 */ void *loadRes;
+    /* 0x018 */ void *loadSprites;
+    /* 0x020 */ s32 flags;       /* bit 2: "continue without saving" was chosen at boot; bit 3: a save was loaded at boot */
+    /* 0x024 */ u8 unk18[0x674];
+    /* 0x698 */ s32 unk68C;      /* bit 0 picks the retry question of the scan flow */
+    /* 0x69C */ s32 unk690[3];
+    /* 0x6A8 */ McFlowSlotInfo slot[8];
+#else
     /* 0x008 */ s32 unk8[3];
     /* 0x014 */ s32 flags;       /* bit 2: "continue without saving" was chosen at boot; bit 3: a save was loaded at boot */
     /* 0x018 */ u8 unk18[0x674];
     /* 0x68C */ s32 unk68C;      /* bit 0 picks the retry question of the scan flow */
     /* 0x690 */ s32 unk690[3];
     /* 0x69C */ McFlowSlotInfo slot[8];
+#endif
 } McFlowProgress;
 
 /* Card state per port, kept by the card layer (local view; the names are readings of how it is used). */
@@ -1379,20 +1392,86 @@ void McFlow_UpdateBootLoad(void) {
 }
 
 #if defined(PORT_PS3)
-/* The PS3 test harness has no player: when the boot card flow is showing an open dialog and waiting for a
-   confirmation, ps3pad-side input synthesis (src/sys/game_pad.c) pulses Cross. Only the four states that
-   actually read a confirmation are included, and only after the window has been fully open for two seconds,
-   so the popup stays on screen long enough to be captured and the logo screens are never skipped by it. */
-s32 Port_BootConfirmWanted(void) {
+/* The PS3 test harness has no player: src/sys/game_pad.c pulses the buttons this returns once the window has
+   been fully open for two seconds (so every popup stays on screen long enough to be captured). The boot card
+   flow's four confirmation states are confirmed with Cross; a new game's questions open on "No", so the cursor
+   is moved left to "Yes" first. Error pages ("no card", "failed") need a plain Cross to go on. */
+extern s32 Dialog_GetCursor(void);
+extern s32 Dialog_HasChoices(void);
+u32 Port_AutoPadButtons(void) {
     static s32 sOpenFrames;
+    static s32 sMenuFrames;
+    static s32 sHistFrames;
+    extern s32 Port_MainMenuReady(void);
+    extern s32 Port_ProgressMode(void);
+    s32 mode = Port_ProgressMode();
     s32 st;
 
-    if (gMcFlow == NULL || gMcFlow->flow != McFlow_UpdateBootLoad) {
+    if (gProgress != NULL && mode == 4) {
+        /* The main menu: once it has finished opening, press Cross on the highlighted entry (Dragon History on a
+           fresh save). One pulse a second at most: the menu changes the mode as soon as the choice is taken. */
+        if (!Port_MainMenuReady()) {
+            sMenuFrames = 0;
+            return 0;
+        }
+        sMenuFrames++;
+        if (sMenuFrames < 30) {
+            return 0;
+        }
+        return ((sMenuFrames - 30) % 60) < 6 ? PADG_CROSS : 0;
+    }
+    sMenuFrames = 0;
+    if (gProgress != NULL && mode >= 6 && mode <= 10) {
+        /* Dragon History: the guide dialogues wait for their voice line to end (the PS3 has no voice playback
+           yet), so confirm every step. Cross takes the saga menu's entries and Start skips the description
+           narration (MODEMENU_STEP_NARR_WAIT only handles Start / Circle, never Cross). */
+        sHistFrames++;
+        if (sHistFrames < 12) {
+            return 0;
+        }
+        return PADG_CROSS | PADG_START;
+    }
+    sHistFrames = 0;
+    if (gMcFlow == NULL) {
         sOpenFrames = 0;
         return 0;
     }
-    st = gMcFlow->state;
-    if (st != 7 && st != 0x15 && st != 0x16 && st != 0x1D) {
+    if (gMcFlow->flow == McFlow_UpdateBootLoad) {
+        st = gMcFlow->state;
+        if (st != 7 && st != 0x15 && st != 0x16 && st != 0x1D) {
+            sOpenFrames = 0;
+            return 0;
+        }
+    } else if (gMcFlow->flow == McFlow_UpdateNewSave) {
+        st = gMcFlow->state;
+        switch (st) {
+        case 1:    /* "begin a new game?" */
+        case 9:    /* "create a save file?" */
+        case 0xA:  /* "the current settings will be lost" */
+        case 0xD:
+        case 0x17: /* unformatted card */
+        case 0x21: /* overwrite */
+            break;
+        case 0x10: /* saved */
+        case 0x11:
+        case 0x1A:
+        case 0x1B:
+        case 0x1E:
+        case 0x1F:
+            if (!Dialog_IsOpen()) {
+                sOpenFrames = 0;
+                return 0;
+            }
+            if (sOpenFrames < 30) {
+                sOpenFrames++;
+                return 0;
+            }
+            return PADG_CROSS;
+        default:
+            sOpenFrames = 0;
+            return 0;
+        }
+    } else {
         sOpenFrames = 0;
         return 0;
     }
@@ -1400,11 +1479,14 @@ s32 Port_BootConfirmWanted(void) {
         sOpenFrames = 0;
         return 0;
     }
-    if (sOpenFrames < 120) {
+    if (sOpenFrames < 30) {
         sOpenFrames++;
         return 0;
     }
-    return 1;
+    if (Dialog_HasChoices() && Dialog_GetCursor() != 0) {
+        return PADG_LEFT;
+    }
+    return PADG_CROSS;
 }
 #endif
 
@@ -2894,8 +2976,8 @@ void McFlow_Init(void) {
     McFlowReplay *rep;
     s32 i, j;
 
-    gMcFlow = Heap_Alloc(0x39F90, 0x20, 0, 2);
-    memset(gMcFlow, 0, 0x39F90);
+    gMcFlow = Heap_Alloc(sizeof(*gMcFlow), 0x20, 0, 2);
+    memset(gMcFlow, 0, sizeof(*gMcFlow));
     gMcFlow->pack = File_LoadSync(gProgress->fileBase + 0x1D, NULL, 0);
     gMcFlow->res = Sprite_Unpack(gMcFlow->pack, NULL, NULL);
     work = gMcFlow;

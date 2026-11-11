@@ -24,6 +24,9 @@ IconWin *gIconWin = NULL;
 void IconWin_Init(u32 *pack, FlashTexRes *icons) {
     FlashTexRes *res = NULL;
 
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: IconWin_Init enter"); }
+#endif
     gIconWin = Heap_Alloc(sizeof(IconWin), 0x20, 0, HEAP_ANY);
     memset(gIconWin, 0, sizeof(IconWin));
 
