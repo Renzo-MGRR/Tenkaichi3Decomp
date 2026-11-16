@@ -2,7 +2,7 @@
 
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/RsPFr4pkaN)
 
-A native PC port of **Dragon Ball Z: Budokai Tenkaichi 3** (PlayStation 2, USA release, SLUS-21678), built on
+A native PS3 port of **Dragon Ball Z: Budokai Tenkaichi 3** (PlayStation 2, USA release, SLUS-21678), built on
 the matching decompilation in **BT3-Decompiled**. It is the game's own code compiled for PC, with a new
 renderer, sound and input layer underneath; it is not an emulator.
 
