@@ -15,47 +15,23 @@
 
 #define REG(a) ((volatile uint32_t *)Port_Ptr(a))
 
-#if defined(PORT_PS3)
-extern void Port_StageTrace(const char *what);
-#define GT(what) Port_StageTrace("Port_Dma: " what)
-#else
-#define GT(what) ((void)0)
-#endif
-
 extern void Port_GsVif1Chain(uint32_t tadr, int tte);
 extern void Port_GsGifChannel(uint32_t addr, uint32_t qwc, int chain);
 
 static void Port_DmaTransfer(int channel) {
-    GT("transfer");
     /* Channel 1 in source-chain mode (CHCR mode bits = 1) is the frame's display list: D1_TADR points at it. */
-#if defined(PORT_PS3)
-    fprintf(stderr, "bt3: DMA transfer channel=%d\n", channel); fflush(stderr);
-#endif
     if (channel == 1 && ((*REG(0x10009000u) >> 2) & 3) == 1) {
         uint32_t tadr = *REG(0x10009030u);
         int tte = (int)((*REG(0x10009000u) >> 6) & 1);
-#if defined(PORT_PS3)
-        fprintf(stderr, "bt3: VIF1 chain begin tadr=%08x tte=%d\n", tadr, tte); fflush(stderr);
-#endif
         Port_GsVif1Chain(tadr, tte);
-#if defined(PORT_PS3)
-        fprintf(stderr, "bt3: VIF1 chain returned\n"); fflush(stderr);
-#endif
     }
     /* Channel 2 is the GIF channel: normal mode sends QWC quadwords at MADR, chain mode a chain at TADR. */
     if (channel == 2) {
         int chain = ((*REG(0x1000A000u) >> 2) & 3) == 1;
         uint32_t addr = chain ? *REG(0x1000A030u) : *REG(0x1000A010u);
         uint32_t qwc = *REG(0x1000A020u);
-#if defined(PORT_PS3)
-        fprintf(stderr, "bt3: GIF channel begin addr=%08x qwc=%u chain=%d\n", addr, qwc, chain); fflush(stderr);
-#endif
         Port_GsGifChannel(addr, qwc, chain);
-#if defined(PORT_PS3)
-        fprintf(stderr, "bt3: GIF channel returned\n"); fflush(stderr);
-#endif
     }
-    GT("transfer done");
 }
 
 /* The other DMA (and, in gfx.c, GS) registers: on PS3 their game addresses are backed by the BSS

@@ -25,6 +25,10 @@
 #include <pthread.h>
 #include <string.h>
 #include <time.h>
+#if defined(PORT_PS3)
+/* (the pipeline's include path has the newlib headers only; LV2's prototype is this one) */
+extern long long sysGetSystemTime(void);
+#endif
 #include "gs_internal.h"
 #include "sys/gfx.h"
 #include "../port_addr.h"
@@ -53,6 +57,14 @@ typedef struct Target {
 
 GsState gGs;
 uint32_t gGsPageGen[512];
+static uint64_t gGsPageHash[512]; /* what each page holds, as far as the uploads have written it */
+
+static uint64_t page_mix(uint64_t h, uint64_t v) {
+    v ^= v >> 33;
+    v *= 0xFF51AFD7ED558CCDull;
+    v ^= v >> 33;
+    return h ^ v;
+}
 unsigned gGsFbUploads; /* bit 0 / 1: pixels were uploaded into display buffer 0 / 0x70 since the back end last looked */
 unsigned gGsFrame;
 #define gs gGs
@@ -92,12 +104,36 @@ static int sProbeX = -1, sProbeY = -1;
 static int sDumpFrame = -1; /* BT3_GS_DUMP=<frame>: list that frame's primitives */
 static unsigned sStat[8]; /* per frame: DMA tags, VIF codes, DIRECT quadwords, GIF tags, register writes, vertices, image quadwords, unknown VIF */
 static unsigned sTriTested, sTriPassed; /* pixels the triangle walk looked at / kept */
+/* Temporary PS3 profiling: what the menu frames ask the rasteriser to do. */
+static unsigned sProfTex[4], sProfBlend, sProfDepth, sProfAlpha, sProfMask, sProfPrims, sProfSprites;
+static unsigned sProfTarget[16];
+static unsigned sProfDepthFunc[4], sProfDepthWrite;
+static unsigned sFastTri, sSlowTri; /* triangles the fast path drew / had to leave to the general one */
+static unsigned sFastSpr, sSlowSpr; /* the same for sprites */
+static unsigned sFastMiss[16];      /* why the fast path refused: frame, depth, zformat, alpha test, texture, blend, texcache */
+static uint64_t sSlowTest, sSlowAlpha, sSlowZbuf, sSlowFrame, sSlowPrim, sSlowTex0, sSlowClamp;
+static uint64_t sSlow2Test, sSlow2Alpha, sSlow2Zbuf, sSlow2Frame, sSlow2Prim, sSlow2Tex0, sSlow2Clamp;
+static uint64_t sProfTest, sProfAlphaReg, sProfZbuf, sProfFrame, sProfPrim0, sProfTex0, sProfClamp;
+static uint64_t sTriTest, sTriAlpha, sTriZbuf, sTriFrame, sTriPrim, sTriTex0, sTriClamp;
+static uint64_t sProfRasterNs, sProfUploadNs, sProfWalkNs, sProfStoreNs, sProfPresentNs, sProfDecodeNs;
+static uint64_t sProfTriNs, sProfSprNs; /* the raster's two fast paths, to see which one to attack */
+/* The menu triangles the fast spans take, and those their state almost fits (to see what keeps them out). */
+static uint32_t sMenuTri, sMenuPix, sMenuNear, sMenuNearCol;
+static uint64_t sProfVifNs, sProfGifNs, sProfUnpackNs; /* (the first two include the raster and uploads) */
+static unsigned sGifIters, sGifPacked, sGifReglist, sGifImage, sGifNop; /* the GIF parser's work */
+static unsigned sFastTexDecodes, sFastTexPals, sFastTexHits, sFastTexTexels; /* textures decoded into the fast path's cache, palettes re-read, and index-buffer hits */
+static unsigned sFastTexReject[5]; /* why fasttex_get refused a texture: psm, palette, size, frame pages, depth pages */
+static unsigned sUpCalls, sUpHits, sUpNew, sUpChanged, sUpGen; static uint64_t sUpBytes, sUpHitBytes; /* uploads and the ones skipped as unchanged */
+static uint64_t sUpSkipBytes; /* 32-bit texture uploads the fast path never samples */
+static uint64_t sUpBytesFmt[4]; /* upload bytes by destination format: 4, 8, 16, 32 bits */
+static unsigned sUpBigCount; static uint64_t sUpBigBytes; /* uploads of 64 KB and more (a streamed picture?) */
+static uint64_t now_ns(void);
 
 /* ---- GS local memory: 4 MB. A buffer pointer counts 256-byte blocks, a buffer width counts 64 pixels. Where a
    pixel lives depends on its format: pages of 32 blocks, blocks in a format-specific order inside the page,
    "columns" inside the block. The tables are the hardware's; the two indexed ones are generated from their first
    column (odd columns exchange the two halves of every group of eight). ---- */
-static uint32_t sVram[1 << 20];
+static uint32_t sVram[1 << 20] __attribute__((aligned(64)));
 static const uint8_t kBlock32[4][8] = {{0, 1, 4, 5, 16, 17, 20, 21}, {2, 3, 6, 7, 18, 19, 22, 23}, {8, 9, 12, 13, 24, 25, 28, 29}, {10, 11, 14, 15, 26, 27, 30, 31}};
 static const uint8_t kBlock16[8][4] = {{0, 2, 8, 10}, {1, 3, 9, 11}, {4, 6, 12, 14}, {5, 7, 13, 15}, {16, 18, 24, 26}, {17, 19, 25, 27}, {20, 22, 28, 30}, {21, 23, 29, 31}};
 static const uint8_t kBlock16S[8][4] = {{0, 2, 16, 18}, {1, 3, 17, 19}, {8, 10, 24, 26}, {9, 11, 25, 27}, {4, 6, 20, 22}, {5, 7, 21, 23}, {12, 14, 28, 30}, {13, 15, 29, 31}};
@@ -121,6 +157,11 @@ static uint16_t sCol4[16][32];
 /* For the uploads: where the pixel (x, y) lies inside its page, as an index of pixels of its own size. A page is
    64 x 32 pixels of 32 bits, 64 x 64 of 16, 128 x 64 of 8, 128 x 128 of 4; the page's own number comes on top. */
 static uint16_t sIn32[32][64], sIn16[2][64][64], sIn8[64][128], sIn4[128][128];
+
+/* The fast 32-bit rasteriser's address inside one page: the block (whose order in a page differs for the depth
+   formats) and the column, for x within 64 pixels of the page. The page term ((x >> 6) << 11) is added by the
+   caller. */
+static uint16_t sOff32[32][64], sOff32Z[32][64];
 
 static void tables_init(void) {
     int y, x;
@@ -152,6 +193,13 @@ static void tables_init(void) {
                 sIn8[y][x] = (uint16_t)((kBlock32[(y >> 4) & 3][(x >> 4) & 7] << 8) + sCol8[y & 15][x & 15]);
             }
             sIn4[y][x] = (uint16_t)((kBlock16[(y >> 4) & 7][(x >> 5) & 3] << 9) + sCol4[y & 15][x & 31]);
+        }
+    }
+    for (y = 0; y < 32; y++) {
+        for (x = 0; x < 64; x++) {
+            uint32_t blk = kBlock32[(y >> 3) & 3][(x >> 3) & 7], col = kCol32[y & 7][x & 7];
+            sOff32[y][x] = (uint16_t)((blk << 6) + col);
+            sOff32Z[y][x] = (uint16_t)(((blk ^ 0x18) << 6) + col);
         }
     }
 }
@@ -394,6 +442,279 @@ static uint32_t texel(int ctx, int u, int v) {
     return Gs_Expand(vram_rw(cbp, 1, cpsm, c & 7, c >> 3, 0, 0), cpsm);
 }
 
+/* ---- The fast menu path's texture cache.
+   The menus are drawn from a handful of 8-bit paletted textures that are uploaded once and then sampled for every
+   pixel of the screen. Sampling them through texel() costs two vram_rw() calls a pixel (one for the index, one for
+   the palette entry, each with the format's address arithmetic); here the indices are decoded once into a linear
+   array and the palette into 256 RGBA words, so a sample is one array read and one palette read. The cache is keyed
+   on the texture's registers and on the upload generations of the pages it lives in (a texture uploaded again
+   unchanged is decoded again only if its pages really changed). */
+#define FASTTEX_SLOTS 64
+#define FASTTEX_POOL_SIZE (4u * 1024u * 1024u)
+typedef struct {
+    int valid;
+    int opaque; /* every used palette entry has alpha 0x80: the blend is a plain copy */
+    int alpha_hi; /* some palette entry's alpha is above 0x80: the blend can leave 0..255 and saturates */
+    int alpha_none; /* every used palette entry is fully transparent: nothing is ever written */
+    uint32_t tbp, tbw, psm, tw, th, cbp, cpsm, twlog;
+    uint64_t clamp, texa;
+    uint64_t idxGen; /* the texture pages' content: the decoded indices are valid while it is the same */
+    uint64_t palGen; /* the palette pages': a change only re-reads the 256 entries, not the indices */
+    uint8_t *idx;
+    uint32_t bufOff, bufSize;
+    uint32_t pal[256];
+    uint32_t bl[256]; /* the blend's constants per entry: Cs * As >> 7 per channel, and 128 - As in the top byte */
+} FastTex;
+static FastTex sFastTex[FASTTEX_SLOTS];
+static int sFastTexNext;
+/* The decoded indices' own pool: the newlib heap is 8 MB for the whole port, and a slot per menu texture would
+   eat it (a decode used to fail, and its triangle fall back to the slow path, once the heap ran out). */
+static uint8_t sFastTexPool[FASTTEX_POOL_SIZE] __attribute__((aligned(64)));
+static uint32_t sFastTexPoolUsed;
+
+/* The slot's index buffer, at least `need` bytes: reused when it is already big enough, and the whole pool
+   restarted (every slot dropped) when it runs out. */
+static uint8_t *fasttex_buffer(FastTex *ft, uint32_t need) {
+    uint32_t bytes = (need + 63u) & ~63u, i;
+
+    if (ft->bufSize >= bytes) {
+        return sFastTexPool + ft->bufOff;
+    }
+    if (bytes > FASTTEX_POOL_SIZE) {
+        return NULL;
+    }
+    if (sFastTexPoolUsed + bytes > FASTTEX_POOL_SIZE) {
+        for (i = 0; i < FASTTEX_SLOTS; i++) {
+            sFastTex[i].valid = 0;
+            sFastTex[i].bufSize = 0;
+        }
+        sFastTexPoolUsed = 0;
+    }
+    ft->bufOff = sFastTexPoolUsed;
+    ft->bufSize = bytes;
+    sFastTexPoolUsed += bytes;
+    return sFastTexPool + ft->bufOff;
+}
+
+static uint64_t fast_pages_gen(uint32_t first, uint32_t count) {
+    uint64_t g = 0xCBF29CE484222325ull;
+    uint32_t i;
+
+    for (i = 0; i < count; i++) {
+        g = (g ^ gGsPageHash[(first + i) & 511]) * 0x100000001B3ull;
+    }
+    return g;
+}
+
+/* Reads a texture's palette and builds the blend's constants. Kept apart from the index decode: the menus
+   upload a different palette to the same two GS pages before each texture, so a cached texture's indices stay
+   valid while its palette has to be re-read (256 words) whenever those pages change. */
+static void fasttex_palette(FastTex *ft) {
+    uint32_t psm = ft->psm, cbp = ft->cbp, cpsm = ft->cpsm, i, n = psm == 0x13 ? 256u : 16u;
+
+    if (psm == 0x13) {
+        for (i = 0; i < 256; i++) {
+            uint32_t c = (i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1);
+            ft->pal[i] = Gs_Expand(vram_rw(cbp, 1, cpsm, c & 15, c >> 4, 0, 0), cpsm);
+        }
+    } else {
+        for (i = 0; i < 16; i++) {
+            ft->pal[i] = Gs_Expand(vram_rw(cbp, 1, cpsm, i & 7, i >> 3, 0, 0), cpsm);
+        }
+    }
+    sFastTexPals++;
+    {
+        uint32_t ok = 1, hi = 0, any = 0;
+
+        for (i = 0; i < n; i++) {
+            if ((ft->pal[i] >> 24) != 0x80) {
+                ok = 0;
+            }
+            if ((ft->pal[i] >> 24) > 0x80) {
+                hi = 1;
+            }
+            if ((ft->pal[i] >> 24) != 0) {
+                any = 1;
+            }
+        }
+        ft->opaque = (int)ok;
+        ft->alpha_hi = (int)hi;
+        ft->alpha_none = !any;
+        for (i = 0; i < n; i++) {
+            uint32_t c = ft->pal[i], a = c >> 24;
+
+            if (a > 0x80) {
+                a = 0x80;
+            }
+            ft->bl[i] = ((c & 0xFF) * a >> 7) | ((((c >> 8) & 0xFF) * a >> 7) << 8) |
+                        ((((c >> 16) & 0xFF) * a >> 7) << 16) | ((128 - a) << 24);
+        }
+    }
+}
+
+/* The texture the current state draws from, decoded; NULL when the state is not one the fast path can sample
+   (only 8-bit paletted textures with a 32-bit palette, as the menus use). */
+static FastTex *fasttex_get(int ctx) {
+    uint64_t t0 = gs.tex0[ctx], cl = gs.clamp[ctx], ta = gs.texa, fr = gs.frame[ctx], zb = gs.zbuf[ctx];
+    uint32_t psm = (uint32_t)(t0 >> 20) & 0x3F, cpsm = (uint32_t)(t0 >> 51) & 15;
+    uint32_t tbp = (uint32_t)(t0 & 0x3FFF), tbw = (uint32_t)((t0 >> 14) & 0x3F);
+    uint32_t tw = 1u << ((t0 >> 26) & 15), th = 1u << ((t0 >> 30) & 15);
+    uint32_t cbp = (uint32_t)((t0 >> 37) & 0x3FFF);
+    uint64_t idxGen, palGen;
+    uint32_t i, u, v, tp0, tp1, fp0, fp1, zp0, zp1;
+    FastTex *ft;
+
+    if (tbw == 0) {
+        tbw = 1; /* (the GS treats TBW = 0 as one block wide; the menus' small 32x32 textures use it) */
+    }
+    if ((psm != 0x13 && psm != 0x14) || cpsm != 0 || tw * th > 256u * 1024u) {
+        sFastTexReject[psm != 0x13 && psm != 0x14 ? 0 : cpsm != 0 ? 1 : 2]++;
+        return NULL;
+    }
+    /* A texture that shares pages with the frame or depth buffer being drawn to changes as it is drawn: leave it
+       to the slow path (the menus never do this). The depth pages only matter when the depth is read or written:
+       a depth-tested-but-masked draw (ZBUF.ZMSK) never touches them. */
+    tp0 = tbp >> 5;
+    tp1 = (tbp + (tw * th) / (psm == 0x13 ? 256u : 512u)) >> 5;
+    fp0 = (uint32_t)(fr & 0x1FF);
+    fp1 = fp0 + 120;
+    zp0 = (uint32_t)(zb & 0x1FF);
+    zp1 = zp0 + 120;
+    if ((tp1 >= fp0 && tp0 <= fp1) ||
+        ((((gs.test[ctx] >> 16) & 1) && ((zb >> 32) & 1) == 0) && tp1 >= zp0 && tp0 <= zp1)) {
+        sFastTexReject[(tp1 >= fp0 && tp0 <= fp1) ? 3 : 4]++;
+        return NULL;
+    }
+    idxGen = fast_pages_gen(tp0, ((tw * th) >> (psm == 0x13 ? 13 : 14)) + 2);
+    palGen = fast_pages_gen(cbp >> 5, 2);
+    ft = NULL;
+    for (i = 0; i < FASTTEX_SLOTS; i++) {
+        FastTex *c = &sFastTex[i];
+
+        if (c->valid && c->tbp == tbp && c->tbw == tbw && c->psm == psm && c->tw == tw && c->th == th &&
+            c->clamp == cl && c->texa == ta) {
+            if (c->idxGen == idxGen) {
+                if (c->palGen != palGen || c->cbp != cbp || c->cpsm != cpsm) {
+                    c->cbp = cbp;
+                    c->cpsm = cpsm;
+                    c->palGen = palGen;
+                    fasttex_palette(c);
+                }
+                sFastTexHits++;
+                return c;
+            }
+            ft = c; /* the same texture with stale pages: its index buffer can be decoded into again */
+        }
+    }
+    if (ft == NULL) {
+        ft = &sFastTex[sFastTexNext++ % FASTTEX_SLOTS];
+    }
+    ft->idx = fasttex_buffer(ft, tw * th);
+    if (ft->idx == NULL) {
+        sFastTexReject[2]++;
+        return NULL;
+    }
+    ft->valid = 0;
+    ft->tbp = tbp;
+    ft->tbw = tbw;
+    ft->psm = psm;
+    ft->tw = tw;
+    ft->th = th;
+    ft->cbp = cbp;
+    ft->cpsm = cpsm;
+    ft->twlog = (uint32_t)((t0 >> 26) & 15);
+    ft->clamp = cl;
+    ft->texa = ta;
+    ft->idxGen = idxGen;
+    ft->palGen = palGen;
+    if (psm == 0x13) {
+        if (tw >= 16 && th >= 16) {
+            /* A block is 16 x 16 texels = 256 bytes = 64 words: read a word and scatter its four bytes to the
+               four texels it holds, rather than recomputing the GS's address arithmetic per texel. */
+            int32_t wo[64][4];
+            uint32_t v0, u0, w, k;
+
+            for (v0 = 0; v0 < 16; v0++) {
+                for (u0 = 0; u0 < 16; u0++) {
+                    uint32_t a = sCol8[v0][u0];
+
+                    wo[a >> 2][a & 3] = (int32_t)(v0 * tw + u0);
+                }
+            }
+            for (v0 = 0; v0 < th; v0 += 16) {
+                for (u0 = 0; u0 < tw; u0 += 16) {
+                    uint32_t base = (tbp + ((v0 >> 1) & ~0x1Fu) * (tbw >> 1) + ((u0 >> 2) & ~0x1Fu) +
+                                     kBlock32[(v0 >> 4) & 3][(u0 >> 4) & 7]) << 8;
+                    uint32_t wi = (base >> 2) & 0xFFFFF;
+                    uint8_t *dst = ft->idx + (size_t)v0 * tw + u0;
+
+                    for (w = 0; w < 64; w++) {
+                        uint32_t word = sVram[(wi + w) & 0xFFFFF];
+                        const int32_t *d = wo[w];
+
+                        for (k = 0; k < 4; k++) {
+                            dst[d[k]] = (uint8_t)(word >> (k * 8));
+                        }
+                    }
+                }
+            }
+        } else {
+            for (v = 0; v < th; v++) {
+                for (u = 0; u < tw; u++) {
+                    uint32_t a = ((tbp + ((v >> 1) & ~0x1Fu) * (tbw >> 1) + ((u >> 2) & ~0x1Fu) +
+                                   kBlock32[(v >> 4) & 3][(u >> 4) & 7]) << 8) + sCol8[v & 15][u & 15];
+                    ft->idx[(size_t)v * tw + u] = (uint8_t)(sVram[(a >> 2) & 0xFFFFF] >> ((a & 3) * 8));
+                }
+            }
+        }
+        fasttex_palette(ft);
+    } else {
+        if (tw >= 32 && th >= 16) {
+            /* A block is 32 x 16 texels = 256 bytes = 64 words, eight 4-bit texels a word. */
+            int32_t wo[64][8];
+            uint32_t v0, u0, w, k;
+
+            for (v0 = 0; v0 < 16; v0++) {
+                for (u0 = 0; u0 < 32; u0++) {
+                    uint32_t a = sCol4[v0][u0];
+
+                    wo[a >> 3][a & 7] = (int32_t)(v0 * tw + u0);
+                }
+            }
+            for (v0 = 0; v0 < th; v0 += 16) {
+                for (u0 = 0; u0 < tw; u0 += 32) {
+                    uint32_t base = (tbp + ((v0 >> 2) & ~0x1Fu) * (tbw >> 1) + ((u0 >> 2) & ~0x1Fu) +
+                                     kBlock16[(v0 >> 4) & 7][(u0 >> 5) & 3]) << 9;
+                    uint32_t wi = (base >> 3) & 0xFFFFF;
+                    uint8_t *dst = ft->idx + (size_t)v0 * tw + u0;
+
+                    for (w = 0; w < 64; w++) {
+                        uint32_t word = sVram[(wi + w) & 0xFFFFF];
+                        const int32_t *d = wo[w];
+
+                        for (k = 0; k < 8; k++) {
+                            dst[d[k]] = (uint8_t)((word >> (k * 4)) & 0xF);
+                        }
+                    }
+                }
+            }
+        } else {
+            for (v = 0; v < th; v++) {
+                for (u = 0; u < tw; u++) {
+                    uint32_t a = ((tbp + ((v >> 2) & ~0x1Fu) * (tbw >> 1) + ((u >> 2) & ~0x1Fu) +
+                                   kBlock16[(v >> 4) & 7][(u >> 5) & 3]) << 9) + sCol4[v & 15][u & 31];
+                    ft->idx[(size_t)v * tw + u] = (uint8_t)((sVram[(a >> 3) & 0xFFFFF] >> ((a & 7) * 4)) & 0xF);
+                }
+            }
+        }
+        fasttex_palette(ft);
+    }
+    ft->valid = 1;
+    sFastTexDecodes++;
+    sFastTexTexels += tw * th;
+    return ft;
+}
+
 /* ------------------------------------------------------------------------------------------------ pixels */
 
 static void pixel(Target *sf, int ctx, int x, int y, uint32_t z, uint32_t src) {
@@ -422,6 +743,19 @@ static void pixel(Target *sf, int ctx, int x, int y, uint32_t z, uint32_t src) {
         return;
     }
     sa = src >> 24;
+#if defined(PORT_PS3)
+    /* Temporary profiling: pixel-weighted use of the GS features menus rely on. */
+    if ((pr >> 4) & 1) {
+        uint32_t tpsm = (uint32_t)(gs.tex0[ctx] >> 20) & 0x3F;
+        if (tpsm == 0x13 || tpsm == 0x1B) sProfTex[1]++;
+        else if (tpsm == 0x14 || tpsm == 0x24 || tpsm == 0x2C) sProfTex[0]++;
+        else if (tpsm == 0x02 || tpsm == 0x0A) sProfTex[2]++;
+        else sProfTex[3]++;
+    }
+    if ((pr >> 6) & 1) sProfBlend++;
+    if ((test >> 16) & 1) sProfDepth++;
+    if (test & 1) sProfAlpha++;
+#endif
     if (test & 1) { /* alpha test */
         uint32_t ref = (test >> 4) & 0xFF;
         int pass;
@@ -453,6 +787,9 @@ static void pixel(Target *sf, int ctx, int x, int y, uint32_t z, uint32_t src) {
         z = zmax;
     }
     if ((test >> 16) & 1) { /* depth test */
+#if defined(PORT_PS3)
+        sProfDepthFunc[(test >> 17) & 3]++;
+#endif
         uint32_t zd = vram_rw(zbp, fbw, zpsm, (uint32_t)x, (uint32_t)y, 0, 0);
         switch ((test >> 17) & 3) {
         case 0: sPix[2]++; return;
@@ -461,6 +798,9 @@ static void pixel(Target *sf, int ctx, int x, int y, uint32_t z, uint32_t src) {
         default: if (z <= zd) { sPix[2]++; return; } break;
         }
     }
+#if defined(PORT_PS3)
+    if (!write_z) sProfDepthWrite++;
+#endif
     d = vram_rw(fbp, fbw, fpsm, (uint32_t)x, (uint32_t)y, 0, 0);
     if (Gs_PsmBits(fpsm) == 16) {
         d = (d & 31) << 3 | ((d >> 5) & 31) << 11 | ((d >> 10) & 31) << 19 | ((d & 0x8000) ? 0x80000000u : 0);
@@ -491,6 +831,9 @@ static void pixel(Target *sf, int ctx, int x, int y, uint32_t z, uint32_t src) {
             m = ((m >> 3) & 0x1F) | ((m >> 6) & 0x3E0) | ((m >> 9) & 0x7C00) | ((m >> 16) & 0x8000);
         }
         if (m != 0) {
+#if defined(PORT_PS3)
+            sProfMask++;
+#endif
             old = vram_rw(fbp, fbw, fpsm, (uint32_t)x, (uint32_t)y, 0, 0);
             c = (old & m) | (c & ~m);
         }
@@ -538,10 +881,338 @@ static uint32_t vcol(const Vertex *v) {
     return v->r | v->g << 8 | v->b << 16 | (uint32_t)v->a << 24;
 }
 
+/* The frame buffer word of a pixel of a span. (The depth is not stored by the fast spans: they only take states
+   whose depth test always passes, so the depth they would write is never read again.) */
+#define MENU_DST(X) (&sVram[(crb + (((uint32_t)(X) >> 6) << 11) + off[(X) & 63]) & 0xFFFFF])
+
+/* The blend of one texel over the destination, Cs * As >> 7 + Cd * (128 - As) >> 7, which is the GS's
+   (Cs - Cd) * As >> 7 + Cd to within a bit and keeps every term non-negative. (That matters: LLVM 21's PPC
+   backend miscompiles the subtraction form here, treating the masked channels as non-negative and emitting a
+   logical shift, so negative deltas came out as huge numbers.) Only for palettes whose alphas are all <= 0x80:
+   then the result cannot leave 0..255, and at 0x80 the formula is exactly Cs. As a macro so the span loops below
+   share it without a call a pixel. */
+#define MENU_BLEND_TEXEL(X, TI) do { \
+    uint32_t bp_ = bl[TI]; \
+    uint32_t inv_ = bp_ >> 24; \
+    if (inv_ != 128) { /* As != 0 */ \
+        uint32_t *cw_ = MENU_DST(X); \
+        uint32_t d_ = *cw_; \
+        int nr_ = (int)(bp_ & 0xFF) + (((int)(d_ & 0xFF) * (int)inv_) >> 7); \
+        int ng_ = (int)((bp_ >> 8) & 0xFF) + (((int)((d_ >> 8) & 0xFF) * (int)inv_) >> 7); \
+        int nb_ = (int)((bp_ >> 16) & 0xFF) + (((int)((d_ >> 16) & 0xFF) * (int)inv_) >> 7); \
+        *cw_ = (uint32_t)nr_ | (uint32_t)ng_ << 8 | (uint32_t)nb_ << 16 | (uint32_t)(128 - inv_) << 24; \
+        wrote++; \
+    } \
+} while (0)
+
+/* The state of a sprite's pixels, hoisted out of draw_sprite_fast so its loop can keep it in registers. */
+typedef struct {
+    const uint8_t *idx;
+    const uint32_t *pal;
+    const uint32_t *bl; /* a white sprite's blend constants (see MenuSpan) */
+    uint32_t tw, th, twm, thm;
+    uint32_t wms, wmt, minu, maxu, minv, maxv;
+    uint32_t tfx, tcc, col;
+    int white; /* the menus' state: flat white, TFX = 0 with TCC = 1, clamp addressing, no alpha above 0x80 */
+    int zwrite;
+    uint32_t zval;
+} SprSpan;
+
+/* One scanline of a fast sprite: u runs along x, v is fixed for the row, the colour is the sprite's (flat) vertex
+   colour, and the texture is modulated by it and blended as the triangle path does. */
+static __attribute__((noinline)) unsigned sprite_span(const SprSpan *s, uint32_t crb, uint32_t zrb,
+                                                      const uint16_t *off, const uint16_t *offz,
+                                                      int xa, int xb, int64_t ur, int64_t vf, int64_t ufx) {
+    const uint8_t *idx = s->idx;
+    const uint32_t *pal = s->pal, *bl = s->bl;
+    uint32_t tw = s->tw, th = s->th, twm = s->twm, thm = s->thm;
+    uint32_t wms = s->wms, wmt = s->wmt, minu = s->minu, maxu = s->maxu, minv = s->minv, maxv = s->maxv;
+    uint32_t tfx = s->tfx, tcc = s->tcc, col = s->col, zval = s->zval;
+    uint32_t cr = col & 0xFF, cg = (col >> 8) & 0xFF, cb = (col >> 16) & 0xFF, ca = col >> 24;
+    int zwrite = s->zwrite;
+    unsigned wrote = 0;
+    int x;
+
+    if (s->white) {
+        /* The menus' sprites: the flat colour is the GS's white, so the texel is the source colour and its alpha
+           the source alpha, and the blend's constants are already in bl. The depth is not stored: draw_sprite_fast
+           only takes states whose depth test always passes, so it would never be read again. */
+        int vv = (int)(vf >> 36);
+        int ufree = vv >= 0 && vv < (int)th && (ur >> 36) >= 0 && (ur >> 36) < (int)tw &&
+                    ((ur + ufx * (int64_t)(xb - xa - 1)) >> 36) >= 0 &&
+                    ((ur + ufx * (int64_t)(xb - xa - 1)) >> 36) < (int)tw;
+
+        if (ufree && ufx == ((int64_t)1 << 36)) {
+            /* A 1:1 copy: u runs with x and v is fixed, so the texture is walked linearly. */
+            uint32_t ti = (uint32_t)vv * tw + (uint32_t)(ur >> 36);
+
+            for (x = xa; x < xb; x++) {
+                MENU_BLEND_TEXEL(x, idx[ti]);
+                ti++;
+            }
+        } else if (ufree) {
+            for (x = xa; x < xb; x++) {
+                MENU_BLEND_TEXEL(x, idx[(uint32_t)vv * tw + (uint32_t)(ur >> 36)]);
+                ur += ufx;
+            }
+        } else {
+            for (x = xa; x < xb; x++) {
+                int uu = (int)(ur >> 36);
+
+                uu = uu < 0 ? 0 : uu >= (int)tw ? (int)tw - 1 : uu;
+                MENU_BLEND_TEXEL(x, idx[(uint32_t)vv * tw + (uint32_t)uu]);
+                ur += ufx;
+            }
+        }
+        return wrote;
+    }
+    for (x = xa; x < xb; x++) {
+        uint32_t page = ((uint32_t)x >> 6) << 11;
+        uint32_t *cw = &sVram[(crb + page + off[x & 63]) & 0xFFFFF];
+        int uu = (int)(ur >> 36), vv = (int)(vf >> 36);
+        uint32_t tc, sr, sg, sb, sa;
+
+        if (wms == 1) {
+            uu = uu < 0 ? 0 : uu >= (int)tw ? (int)tw - 1 : uu;
+        } else if (wms == 0) {
+            uu &= (int)twm;
+        } else if (wms == 2) {
+            uu = uu < (int)minu ? (int)minu : uu > (int)maxu ? (int)maxu : uu;
+        } else {
+            uu = (uu & (int)minu) | (int)maxu;
+        }
+        if (wmt == 1) {
+            vv = vv < 0 ? 0 : vv >= (int)th ? (int)th - 1 : vv;
+        } else if (wmt == 0) {
+            vv &= (int)thm;
+        } else if (wmt == 2) {
+            vv = vv < (int)minv ? (int)minv : vv > (int)maxv ? (int)maxv : vv;
+        } else {
+            vv = (vv & (int)minv) | (int)maxv;
+        }
+        if (uu < 0) uu = 0; else if (uu >= (int)tw) uu = (int)tw - 1;
+        if (vv < 0) vv = 0; else if (vv >= (int)th) vv = (int)th - 1;
+        tc = pal[idx[(uint32_t)vv * tw + (uint32_t)uu]];
+        {
+            uint32_t tr = tc & 0xFF, tg = (tc >> 8) & 0xFF, tb = (tc >> 16) & 0xFF, ta = tc >> 24;
+
+            if (tfx == 0) {
+                sr = (tr * cr) >> 7;
+                sg = (tg * cg) >> 7;
+                sb = (tb * cb) >> 7;
+                sa = tcc ? (ta * ca) >> 7 : ca;
+            } else if (tfx == 1) {
+                sr = tr; sg = tg; sb = tb;
+                sa = tcc ? ta : ca;
+            } else {
+                sr = ((tr * cr) >> 7) + ca;
+                sg = ((tg * cg) >> 7) + ca;
+                sb = ((tb * cb) >> 7) + ca;
+                sa = tcc ? ta + ca : ca;
+            }
+            if (sr > 255) sr = 255;
+            if (sg > 255) sg = 255;
+            if (sb > 255) sb = 255;
+            if (sa > 255) sa = 255;
+        }
+        if (sa == 128) {
+            *cw = sr | sg << 8 | sb << 16 | sa << 24;
+        } else {
+            uint32_t d = *cw;
+            int dr = (int)(d & 0xFF), dg = (int)((d >> 8) & 0xFF), db = (int)((d >> 16) & 0xFF);
+            int nr = (((int)sr - dr) * (int)sa >> 7) + dr;
+            int ng = (((int)sg - dg) * (int)sa >> 7) + dg;
+            int nb = (((int)sb - db) * (int)sa >> 7) + db;
+
+            *cw = (uint32_t)(nr < 0 ? 0 : nr > 255 ? 255 : nr) |
+                  (uint32_t)(ng < 0 ? 0 : ng > 255 ? 255 : ng) << 8 |
+                  (uint32_t)(nb < 0 ? 0 : nb > 255 ? 255 : nb) << 16 | sa << 24;
+        }
+        if (zwrite) {
+            sVram[(zrb + page + offz[x & 63]) & 0xFFFFF] = zval;
+        }
+        wrote++;
+        ur += ufx;
+    }
+    return wrote;
+}
+
+/* The fast path for the menus' sprites: the same state as their triangles (draw_triangle_fast), one 8-bit or 4-bit
+   texture, and the sprite's own mapping (u along x, v along y). The state is hoisted and the coordinates step by
+   fixed-point additions, as there. Returns 0 when the state is not the fast one. */
+static int draw_sprite_fast(Target *sf, int ctx, const Vertex *a, const Vertex *b) {
+    uint64_t test = gs.test[ctx], zb = gs.zbuf[ctx], pr = gs.prim, t0 = gs.tex0[ctx], fr = gs.frame[ctx];
+    uint64_t sc = gs.scissor[ctx], al = gs.alpha[ctx], cl = gs.clamp[ctx];
+    uint32_t fbp, fbw, zbp, tfx, tcc, tw, th, col, zval;
+    FastTex *ft;
+    int wms, wmt, minu, maxu, minv, maxv, zwrite;
+    float x0, x1, y0, y1;
+    int xa, xb, ya, yb, x, y;
+    int64_t uf, ufx, vf;
+
+    if ((uint32_t)((fr >> 24) & 0x3F) != 0 || (fr >> 32) != 0) {
+        sFastMiss[7]++;
+        return 0;
+    }
+    if ((test >> 16) & 1) {
+        if (((test >> 17) & 3) != 1) {
+            sFastMiss[8]++;
+            return 0; /* depth test on and always passing */
+        }
+        if ((0x30 | (uint32_t)((zb >> 24) & 15)) != 0x31) {
+            sFastMiss[9]++;
+            return 0; /* a 32-bit depth buffer */
+        }
+        zwrite = ((zb >> 32) & 1) == 0; /* ZBUF.ZMSK: depth tested but not written */
+    } else {
+        zwrite = 0; /* no depth test: no depth written either */
+    }
+    if (test & 1) {
+        sFastMiss[10]++;
+        return 0;
+    }
+    if (!((pr >> 4) & 1) || !((pr >> 8) & 1)) {
+        sFastMiss[11]++;
+        return 0;
+    }
+    if (!((pr >> 6) & 1) || al != 0x44) {
+        sFastMiss[12]++;
+        return 0;
+    }
+    {
+        uint64_t dt0 = now_ns();
+        ft = fasttex_get(ctx);
+        sProfDecodeNs += now_ns() - dt0;
+    }
+    if (ft == NULL) {
+        sFastMiss[13]++;
+        return 0;
+    }
+    fbp = (uint32_t)(fr & 0x1FF) << 5;
+    fbw = (uint32_t)((fr >> 16) & 0x3F);
+    zbp = (uint32_t)(zb & 0x1FF) << 5;
+    tfx = (uint32_t)((t0 >> 35) & 3);
+    tcc = (uint32_t)((t0 >> 34) & 1);
+    tw = ft->tw;
+    th = ft->th;
+    wms = (int)(cl & 3);
+    wmt = (int)((cl >> 2) & 3);
+    minu = (int)((cl >> 4) & 0x3FF);
+    maxu = (int)((cl >> 14) & 0x3FF);
+    minv = (int)((cl >> 24) & 0x3FF);
+    maxv = (int)((cl >> 34) & 0x3FF);
+    col = vcol(b);
+    x0 = a->x; x1 = b->x; y0 = a->y; y1 = b->y;
+    if (x0 > x1) {
+        const Vertex *t = a;
+        a = b;
+        b = t;
+        x0 = a->x;
+        x1 = b->x;
+    }
+    xa = (int)(x0 + 0.9375f);
+    xb = (int)(x1 + 0.9375f);
+    if (y0 <= y1) {
+        ya = (int)(y0 + 0.9375f);
+        yb = (int)(y1 + 0.9375f);
+    } else {
+        ya = (int)(y1 + 0.9375f);
+        yb = (int)(y0 + 0.9375f);
+    }
+    {
+        int sx0 = (int)(sc & 0x7FF), sx1 = (int)((sc >> 16) & 0x7FF);
+        int sy0 = (int)((sc >> 32) & 0x7FF), sy1 = (int)((sc >> 48) & 0x7FF);
+        if (xa < sx0) xa = sx0;
+        if (xb > sx1 + 1) xb = sx1 + 1;
+        if (ya < sy0) ya = sy0;
+        if (yb > sy1 + 1) yb = sy1 + 1;
+        if (xa < 0) xa = 0;
+        if (xb > SURF_W) xb = SURF_W;
+        if (ya < 0) ya = 0;
+        if (yb > SURF_H) yb = SURF_H;
+        if (xa >= xb || ya >= yb) {
+            return 1;
+        }
+    }
+    uf = (int64_t)(((double)a->u + (x1 != x0 ? (double)(b->u - a->u) * ((double)xa - (double)x0) / ((double)x1 - (double)x0) : 0.0)) * 4294967296.0);
+    ufx = (int64_t)((x1 != x0 ? (double)(b->u - a->u) / ((double)x1 - (double)x0) : 0.0) * 4294967296.0);
+    zval = b->z;
+    {
+        SprSpan st;
+        unsigned wrote = 0;
+
+        st.idx = ft->idx;
+        st.pal = ft->pal;
+        st.bl = ft->bl;
+        st.tw = tw;
+        st.th = th;
+        st.twm = tw - 1;
+        st.thm = th - 1;
+        st.wms = (uint32_t)wms;
+        st.wmt = (uint32_t)wmt;
+        st.minu = (uint32_t)minu;
+        st.maxu = (uint32_t)maxu;
+        st.minv = (uint32_t)minv;
+        st.maxv = (uint32_t)maxv;
+        st.tfx = tfx;
+        st.tcc = tcc;
+        st.col = col;
+        st.white = (col == 0x80808080u && tfx == 0 && tcc == 1 && wms == 1 && wmt == 1 && !ft->alpha_hi);
+        st.zwrite = zwrite;
+        st.zval = zval;
+        for (y = ya; y < yb; y++) {
+            uint32_t crb = (fbp + ((uint32_t)y & ~0x1Fu) * fbw) << 6;
+            uint32_t zrb = (zbp + ((uint32_t)y & ~0x1Fu) * fbw) << 6;
+            const uint16_t *off = sOff32[y & 31], *offz = sOff32Z[y & 31];
+            int64_t ur = uf;
+
+            vf = (int64_t)(((double)a->v + (y1 != y0 ? (double)(b->v - a->v) * ((double)y - (double)y0) / ((double)y1 - (double)y0) : 0.0)) * 4294967296.0);
+            wrote += sprite_span(&st, crb, zrb, off, offz, xa, xb, ur, vf, ufx);
+        }
+        sf->drawn += wrote;
+        sPix[3] += wrote;
+    }
+    return 1;
+}
+
 static void draw_sprite(Target *sf, int ctx, const Vertex *a, const Vertex *b) {
     float x0 = a->x, x1 = b->x, y0 = a->y, y1 = b->y;
     int xa, xb, ya, yb, x, y;
     uint32_t col = vcol(b);
+#if defined(PORT_PS3)
+    uint64_t rt0 = now_ns();
+    if (sProfSprites == 0) {
+        sProfTest = gs.test[ctx];
+        sProfAlphaReg = gs.alpha[ctx];
+        sProfZbuf = gs.zbuf[ctx];
+        sProfFrame = gs.frame[ctx];
+        sProfPrim0 = gs.prim;
+        sProfTex0 = gs.tex0[ctx];
+        sProfClamp = gs.clamp[ctx];
+    }
+    sProfPrims++;
+    sProfSprites++;
+    if (sf >= sTargets && sf < sTargets + 16) sProfTarget[sf - sTargets]++;
+#endif
+#if defined(PORT_PS3)
+    if (draw_sprite_fast(sf, ctx, a, b)) {
+        uint64_t dt = now_ns() - rt0;
+        sFastSpr++;
+        sProfRasterNs += dt;
+        sProfSprNs += dt;
+        return;
+    }
+    if (sSlowSpr == 0) {
+        sSlow2Test = gs.test[ctx];
+        sSlow2Alpha = gs.alpha[ctx];
+        sSlow2Zbuf = gs.zbuf[ctx];
+        sSlow2Frame = gs.frame[ctx];
+        sSlow2Prim = gs.prim;
+        sSlow2Tex0 = gs.tex0[ctx];
+        sSlow2Clamp = gs.clamp[ctx];
+    }
+    sSlowSpr++;
+#endif
 
     if (x0 > x1) { const Vertex *t = a; a = b; b = t; x0 = a->x; x1 = b->x; }
     xa = (int)(x0 + 0.9375f); xb = (int)(x1 + 0.9375f);
@@ -554,6 +1225,580 @@ static void draw_sprite(Target *sf, int ctx, const Vertex *a, const Vertex *b) {
                                              (int)((float)a->u + (float)(b->u - a->u) * fx), (int)((float)a->v + (float)(b->v - a->v) * fy)));
         }
     }
+#if defined(PORT_PS3)
+    sProfRasterNs += now_ns() - rt0;
+#endif
+}
+
+/* One edge of a triangle as a scanline DDA: the edge is e(X, Y) = dx * (Y - py) - dy * (X - px), and q tracks
+   floor(C / |dy|) exactly (C is e's constant part at the row's Y, stepped by 16 * dx a row), so a row costs an
+   add and a conditional subtract instead of a 64-bit division. A downward edge (dy > 0) bounds the span from the
+   right (X <= q), an upward one from the left (X >= -q). */
+typedef struct {
+    int64_t q, r, dq, dr, den, val, step;
+    int kind; /* 0: horizontal edge, 1: upper bound, 2: lower bound */
+} TriEdge;
+
+static void tri_edge_init(TriEdge *e, int64_t px, int64_t py, int64_t qx, int64_t qy, int64_t Y0) {
+    int64_t dx = qx - px, dy = qy - py;
+
+    if (dy == 0) {
+        e->kind = 0;
+        e->val = dx * (Y0 - py);
+        e->step = dx << 4;
+        return;
+    }
+    e->den = dy > 0 ? dy : -dy;
+    {
+        int64_t C = dx * (Y0 - py) + dy * px;
+        int64_t s = dx << 4; /* C's step per scanline */
+        int64_t q0 = C >= 0 ? C / e->den : -((-C + e->den - 1) / e->den);
+        int64_t dq = s >= 0 ? s / e->den : -((-s + e->den - 1) / e->den);
+
+        e->q = q0;
+        e->r = C - q0 * e->den;
+        e->dq = dq;
+        e->dr = s - dq * e->den;
+    }
+    e->kind = dy > 0 ? 1 : 2;
+}
+
+/* Steps to the next scanline. Returns 0 when a horizontal edge excludes it. */
+static int tri_edge_row(TriEdge *e, int64_t *lo, int64_t *hi) {
+    if (e->kind == 0) {
+        e->val += e->step;
+        return e->val >= 0;
+    }
+    e->q += e->dq;
+    e->r += e->dr;
+    if (e->r >= e->den) {
+        e->r -= e->den;
+        e->q++;
+    }
+    if (e->kind == 1) {
+        if (e->q < *hi) *hi = e->q;
+    } else if (-e->q > *lo) {
+        *lo = -e->q;
+    }
+    return 1;
+}
+
+/* The x range of one scanline's inside: the exact intersection of the three edge half-planes, so the pixel loop
+   below tests no edges at all. The sample points are at X = x << 4 (the GS's 1/16-pixel unit). */
+static int tri_span(TriEdge *e0, TriEdge *e1, TriEdge *e2, int xa, int xb, int *pxl, int *pxr) {
+    int64_t lo = -((int64_t)1 << 40), hi = (int64_t)1 << 40;
+    int ok0 = tri_edge_row(e0, &lo, &hi), ok1 = tri_edge_row(e1, &lo, &hi), ok2 = tri_edge_row(e2, &lo, &hi);
+    int xl, xr;
+
+    if (!(ok0 && ok1 && ok2)) {
+        return 0;
+    }
+    xl = (int)((lo + 15) >> 4);
+    xr = (int)(hi >> 4);
+    if (xl < xa) xl = xa;
+    if (xr > xb) xr = xb;
+    if (xl > xr) {
+        return 0;
+    }
+    *pxl = xl;
+    *pxr = xr;
+    return 1;
+}
+
+/* ---- The pixel loops of the fast paths, as functions of their own.
+   draw_triangle_fast and draw_sprite_fast each hoist a dozen pieces of GS state and also hold every other
+   triangle's state; llc gave up on the register allocation of their inner loops and spilled the texture
+   coordinates, the cache pointers and the pixel x to the stack (a store and a load each, every pixel: 158 ns a
+   pixel in the menus). These small functions get the loop state into registers instead. */
+
+/* The state a menu triangle's spans share: one decoded paletted texture, the per-pixel UV steps (36 bits of
+   fraction) and whether the texture repeats. The row's own parts (the frame buffer base, the swizzle row, the x
+   range and the starting coordinates) are the span's arguments. */
+typedef struct {
+    const uint8_t *idx;
+    const uint32_t *pal; /* the palette entries: the opaque span's colours */
+    const uint32_t *bl;  /* the fast blend's constants: Cs * As >> 7 a channel, 128 - As in the top byte */
+    uint32_t twlog, twm, thm;
+    int repeat;
+    int64_t ufx, vfx;
+} MenuSpan;
+
+/* A per-triangle copy of the fast blend's constants for a flat colour that is not the GS's white: the source is
+   the texel modulated by it (TFX = 0) and its alpha scaled by the colour's alpha (TCC = 1). */
+static void menu_mod_table(uint32_t *dst, const uint32_t *pal, uint32_t col) {
+    uint32_t cr = col & 0xFF, cg = (col >> 8) & 0xFF, cb = (col >> 16) & 0xFF, ca = col >> 24;
+    unsigned i;
+
+    for (i = 0; i < 256; i++) {
+        uint32_t c = pal[i], ta = c >> 24;
+        uint32_t a = (ta * ca) >> 7;
+        uint32_t r = ((c & 0xFF) * cr) >> 7, g = (((c >> 8) & 0xFF) * cg) >> 7,
+                 b = (((c >> 16) & 0xFF) * cb) >> 7;
+
+        if (r > 255) r = 255;
+        if (g > 255) g = 255;
+        if (b > 255) b = 255;
+        if (a > 0x80) a = 0x80;
+        dst[i] = ((r * a) >> 7) | (((g * a) >> 7) << 8) | (((b * a) >> 7) << 16) | ((128 - a) << 24);
+    }
+}
+
+/* One scanline of a menu triangle whose palette is all opaque: the source colour is the palette entry and the
+   blend is a copy, so a pixel is a texture lookup and a store. */
+static __attribute__((noinline)) unsigned menu_span_opaque(const MenuSpan *ms, uint32_t crb, const uint16_t *off,
+                                                           int xl, int xr, int uvfree, int64_t ur, int64_t vr) {
+    const uint8_t *idx = ms->idx;
+    const uint32_t *pal = ms->pal;
+    uint32_t twlog = ms->twlog, twm = ms->twm, thm = ms->thm;
+    int64_t ufx = ms->ufx, vfx = ms->vfx;
+    int x;
+
+    if (ms->repeat) {
+        if (vfx == 0) { /* horizontal spans (the menus' panels): v is fixed, so its texel row is hoisted */
+            uint32_t vbase = ((uint32_t)(vr >> 36) & thm) << twlog;
+
+            for (x = xl; x <= xr; x++) {
+                *MENU_DST(x) = pal[idx[vbase + ((uint32_t)(ur >> 36) & twm)]];
+                ur += ufx;
+            }
+        } else {
+            for (x = xl; x <= xr; x++) {
+                uint32_t uu = (uint32_t)(ur >> 36) & twm, vv = (uint32_t)(vr >> 36) & thm;
+
+                *MENU_DST(x) = pal[idx[(vv << twlog) + uu]];
+                ur += ufx;
+                vr += vfx;
+            }
+        }
+    } else if (uvfree && ufx == ((int64_t)1 << 36) && vfx == 0) {
+        /* A 1:1 copy: u runs with x and v is fixed, so the texture is walked linearly. */
+        uint32_t ti = ((uint32_t)(vr >> 36) << twlog) + (uint32_t)(ur >> 36);
+
+        for (x = xl; x <= xr; x++) {
+            *MENU_DST(x) = pal[idx[ti]];
+            ti++;
+        }
+    } else if (uvfree && vfx == 0) {
+        uint32_t vbase = (uint32_t)(vr >> 36) << twlog;
+
+        for (x = xl; x <= xr; x++) {
+            *MENU_DST(x) = pal[idx[vbase + (uint32_t)(ur >> 36)]];
+            ur += ufx;
+        }
+    } else {
+        for (x = xl; x <= xr; x++) {
+            int uu = (int)(ur >> 36), vv = (int)(vr >> 36);
+
+            uu = uu < 0 ? 0 : uu > (int)twm ? (int)twm : uu;
+            vv = vv < 0 ? 0 : vv > (int)thm ? (int)thm : vv;
+            *MENU_DST(x) = pal[idx[((uint32_t)vv << twlog) + (uint32_t)uu]];
+            ur += ufx;
+            vr += vfx;
+        }
+    }
+    return (unsigned)(xr - xl + 1);
+}
+
+#define MENU_BLEND_PIXEL(X, UU, VV) MENU_BLEND_TEXEL(X, idx[((uint32_t)(VV) << twlog) + (uint32_t)(UU)])
+
+/* A menu triangle's span with a palette that has transparent entries but no alpha above 0x80. Four loops: the
+   texture repeats (mask), a 1:1 copy (u runs with x, v is fixed: the texture is walked linearly), the span's
+   coordinates are all inside the texture (the menus' usual case: no clamp at all), and the general one. The clamp
+   costs four branches a pixel, and this loop is where the menu's time goes. */
+static __attribute__((noinline)) unsigned menu_span_blend_fast(const MenuSpan *ms, uint32_t crb, const uint16_t *off,
+                                                               int xl, int xr, int uvfree,
+                                                               int64_t ur, int64_t vr) {
+    const uint8_t *idx = ms->idx;
+    const uint32_t *bl = ms->bl;
+    uint32_t twlog = ms->twlog, twm = ms->twm, thm = ms->thm;
+    int64_t ufx = ms->ufx, vfx = ms->vfx;
+    unsigned wrote = 0;
+    int x;
+
+    if (ms->repeat) {
+        if (vfx == 0) {
+            uint32_t vbase = ((uint32_t)(vr >> 36) & thm) << twlog;
+
+            for (x = xl; x <= xr; x++) {
+                MENU_BLEND_TEXEL(x, idx[vbase + ((uint32_t)(ur >> 36) & twm)]);
+                ur += ufx;
+            }
+        } else {
+            for (x = xl; x <= xr; x++) {
+                MENU_BLEND_PIXEL(x, (uint32_t)(ur >> 36) & twm, (uint32_t)(vr >> 36) & thm);
+                ur += ufx;
+                vr += vfx;
+            }
+        }
+    } else if (uvfree && ufx == ((int64_t)1 << 36) && vfx == 0) {
+        uint32_t ti = ((uint32_t)(vr >> 36) << twlog) + (uint32_t)(ur >> 36);
+
+        for (x = xl; x <= xr; x++) {
+            MENU_BLEND_TEXEL(x, idx[ti]);
+            ti++;
+        }
+    } else if (uvfree && vfx == 0) {
+        uint32_t vbase = (uint32_t)(vr >> 36) << twlog;
+
+        for (x = xl; x <= xr; x++) {
+            MENU_BLEND_TEXEL(x, idx[vbase + (uint32_t)(ur >> 36)]);
+            ur += ufx;
+        }
+    } else if (uvfree) {
+        for (x = xl; x <= xr; x++) {
+            MENU_BLEND_PIXEL(x, (int)(ur >> 36), (int)(vr >> 36));
+            ur += ufx;
+            vr += vfx;
+        }
+    } else {
+        for (x = xl; x <= xr; x++) {
+            int uu = (int)(ur >> 36), vv = (int)(vr >> 36);
+
+            uu = uu < 0 ? 0 : uu > (int)twm ? (int)twm : uu;
+            vv = vv < 0 ? 0 : vv > (int)thm ? (int)thm : vv;
+            MENU_BLEND_PIXEL(x, uu, vv);
+            ur += ufx;
+            vr += vfx;
+        }
+    }
+    return wrote;
+}
+
+/* ---- The fast triangle path (PS3).
+   The menus' triangles all share one state: a 32-bit frame buffer and depth buffer, depth always passing (so the
+   depth is written without ever being read), the blend (Cs - Cd) * As + Cd, and one 8-bit paletted texture. In that
+   state the general pixel() path does a vram_rw() per texture sample, palette entry, depth and colour pixel, each
+   with the format's address arithmetic, and interpolates in double precision with three divisions a pixel.
+   Here the whole state is hoisted out of the loop, positions are exact 1/16-pixel integers (the GS's own unit) so
+   the edge functions are exact integer additions, depth / texture coordinates / colours are planes stepped by
+   fixed-point additions, and the texture is the decoded linear one from fasttex_get(). Returns 0 when the state is
+   not that one, and the caller falls back to the general path. */
+static int draw_triangle_fast(Target *sf, int ctx, const Vertex *a, const Vertex *b, const Vertex *c) {
+    uint64_t test = gs.test[ctx], zb = gs.zbuf[ctx], pr = gs.prim, t0 = gs.tex0[ctx], fr = gs.frame[ctx];
+    uint64_t sc = gs.scissor[ctx], al = gs.alpha[ctx], cl = gs.clamp[ctx];
+    uint32_t fbp, fbw, zbp, tfx, tcc, tw, th, flatcol;
+    FastTex *ft;
+    int gouraud, wms, wmt, minu, maxu, minv, maxv, zwrite, passthrough;
+    int64_t ax, ay, bx, by, cx, cy, area;
+    int64_t e0dx, e0dy, e1dx, e1dy, e2dx, e2dy;
+    int64_t zf = 0, zfx = 0, zfy = 0, uf = 0, ufx = 0, ufy = 0, vf = 0, vfx = 0, vfy = 0;
+    int64_t rf = 0, rgf = 0, rbf = 0, raf = 0, rfx = 0, rgx = 0, rbx = 0, rax = 0, rfy = 0, rgy = 0, rby = 0, ray = 0;
+    int x, y, xa, xb, ya, yb;
+
+    if ((uint32_t)((fr >> 24) & 0x3F) != 0 || (fr >> 32) != 0) {
+        sFastMiss[0]++;
+        return 0; /* a 32-bit frame buffer, nothing masked */
+    }
+    if ((test >> 16) & 1) {
+        if (((test >> 17) & 3) != 1) {
+            sFastMiss[1]++;
+            return 0; /* depth test on and always passing */
+        }
+        if ((0x30 | (uint32_t)((zb >> 24) & 15)) != 0x31) {
+            sFastMiss[2]++;
+            return 0; /* a 32-bit depth buffer */
+        }
+        zwrite = ((zb >> 32) & 1) == 0; /* ZBUF.ZMSK: depth tested but not written */
+    } else {
+        zwrite = 0; /* no depth test: no depth written either */
+    }
+    if (test & 1) {
+        sFastMiss[3]++;
+        return 0; /* no alpha test */
+    }
+    if (!((pr >> 4) & 1) || !((pr >> 8) & 1)) {
+        sFastMiss[4]++;
+        return 0; /* textured, integer texture coordinates */
+    }
+    if (!((pr >> 6) & 1) || al != 0x44) {
+        sFastMiss[5]++;
+        return 0; /* blending (Cs - Cd) * As + Cd */
+    }
+    {
+        uint64_t dt0 = now_ns();
+        ft = fasttex_get(ctx);
+        sProfDecodeNs += now_ns() - dt0;
+    }
+    if (ft == NULL) {
+        sFastMiss[6]++;
+        return 0;
+    }
+    if (sFastTri == 0) {
+        sTriTest = test;
+        sTriAlpha = al;
+        sTriZbuf = zb;
+        sTriFrame = fr;
+        sTriPrim = pr;
+        sTriTex0 = t0;
+        sTriClamp = cl;
+    }
+    fbp = (uint32_t)(fr & 0x1FF) << 5;
+    fbw = (uint32_t)((fr >> 16) & 0x3F);
+    zbp = (uint32_t)(zb & 0x1FF) << 5;
+    gouraud = (int)((pr >> 3) & 1);
+    tfx = (uint32_t)((t0 >> 35) & 3);
+    tcc = (uint32_t)((t0 >> 34) & 1);
+    passthrough = (tfx == 1 && tcc == 1);
+    tw = ft->tw;
+    th = ft->th;
+    wms = (int)(cl & 3);
+    wmt = (int)((cl >> 2) & 3);
+    minu = (int)((cl >> 4) & 0x3FF);
+    maxu = (int)((cl >> 14) & 0x3FF);
+    minv = (int)((cl >> 24) & 0x3FF);
+    maxv = (int)((cl >> 34) & 0x3FF);
+    flatcol = vcol(c);
+
+    ax = (int64_t)(a->x * 16.0f); ay = (int64_t)(a->y * 16.0f);
+    bx = (int64_t)(b->x * 16.0f); by = (int64_t)(b->y * 16.0f);
+    cx = (int64_t)(c->x * 16.0f); cy = (int64_t)(c->y * 16.0f);
+    area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if (area == 0) {
+        return 1;
+    }
+    if (area < 0) { /* the winding does not matter to the GS: make the edge tests all ">=" */
+        const Vertex *t = b;
+        int64_t tt;
+        b = c;
+        c = t;
+        tt = bx; bx = cx; cx = tt;
+        tt = by; by = cy; cy = tt;
+        area = -area;
+    }
+    {
+        float fminx = a->x, fmaxx = a->x, fminy = a->y, fmaxy = a->y;
+        int sx0, sx1, sy0, sy1;
+
+        if (b->x < fminx) fminx = b->x;
+        if (c->x < fminx) fminx = c->x;
+        if (b->x > fmaxx) fmaxx = b->x;
+        if (c->x > fmaxx) fmaxx = c->x;
+        if (b->y < fminy) fminy = b->y;
+        if (c->y < fminy) fminy = c->y;
+        if (b->y > fmaxy) fmaxy = b->y;
+        if (c->y > fmaxy) fmaxy = c->y;
+        xa = (int)fminx; xb = (int)fmaxx; ya = (int)fminy; yb = (int)fmaxy;
+        sx0 = (int)(sc & 0x7FF); sx1 = (int)((sc >> 16) & 0x7FF);
+        sy0 = (int)((sc >> 32) & 0x7FF); sy1 = (int)((sc >> 48) & 0x7FF);
+        if (xa < sx0) xa = sx0;
+        if (xb > sx1) xb = sx1;
+        if (ya < sy0) ya = sy0;
+        if (yb > sy1) yb = sy1;
+        if (xa < 0) xa = 0;
+        if (xb > SURF_W - 1) xb = SURF_W - 1;
+        if (ya < 0) ya = 0;
+        if (yb > SURF_H - 1) yb = SURF_H - 1;
+        if (xa > xb || ya > yb) {
+            return 1;
+        }
+    }
+    /* The edge functions are in 1/16-pixel units (X = x << 4), so one screen pixel is 16 units: the steps the
+       inner loops add are the derivatives at that scale. (They used to be the per-unit ones, which made every
+       triangle sample a sixteenth of its texture range: the menus' pictures came out as huge blocks.) */
+    e0dx = -(cy - by) << 4; e0dy = (cx - bx) << 4;
+    e1dx = -(ay - cy) << 4; e1dy = (ax - cx) << 4;
+    e2dx = -(by - ay) << 4; e2dy = (bx - ax) << 4;
+    {
+        int64_t X = (int64_t)xa << 4, Y = (int64_t)ya << 4;
+        int64_t e0 = (cx - bx) * (Y - by) - (cy - by) * (X - bx);
+        int64_t e1 = (ax - cx) * (Y - cy) - (ay - cy) * (X - cx);
+        int64_t e2 = (bx - ax) * (Y - ay) - (by - ay) * (X - ax);
+        double inv = 1.0 / (double)area;
+
+        zf = (int64_t)(((double)a->z * (double)e0 + (double)b->z * (double)e1 + (double)c->z * (double)e2) * inv * 4294967296.0);
+        zfx = (int64_t)(((double)a->z * (double)e0dx + (double)b->z * (double)e1dx + (double)c->z * (double)e2dx) * inv * 4294967296.0);
+        zfy = (int64_t)(((double)a->z * (double)e0dy + (double)b->z * (double)e1dy + (double)c->z * (double)e2dy) * inv * 4294967296.0);
+        uf = (int64_t)(((double)a->u * (double)e0 + (double)b->u * (double)e1 + (double)c->u * (double)e2) * inv * 4294967296.0);
+        ufx = (int64_t)(((double)a->u * (double)e0dx + (double)b->u * (double)e1dx + (double)c->u * (double)e2dx) * inv * 4294967296.0);
+        ufy = (int64_t)(((double)a->u * (double)e0dy + (double)b->u * (double)e1dy + (double)c->u * (double)e2dy) * inv * 4294967296.0);
+        vf = (int64_t)(((double)a->v * (double)e0 + (double)b->v * (double)e1 + (double)c->v * (double)e2) * inv * 4294967296.0);
+        vfx = (int64_t)(((double)a->v * (double)e0dx + (double)b->v * (double)e1dx + (double)c->v * (double)e2dx) * inv * 4294967296.0);
+        vfy = (int64_t)(((double)a->v * (double)e0dy + (double)b->v * (double)e1dy + (double)c->v * (double)e2dy) * inv * 4294967296.0);
+        if (gouraud) {
+            rf = (int64_t)(((double)a->r * (double)e0 + (double)b->r * (double)e1 + (double)c->r * (double)e2) * inv * 4294967296.0);
+            rgf = (int64_t)(((double)a->g * (double)e0 + (double)b->g * (double)e1 + (double)c->g * (double)e2) * inv * 4294967296.0);
+            rbf = (int64_t)(((double)a->b * (double)e0 + (double)b->b * (double)e1 + (double)c->b * (double)e2) * inv * 4294967296.0);
+            raf = (int64_t)(((double)a->a * (double)e0 + (double)b->a * (double)e1 + (double)c->a * (double)e2) * inv * 4294967296.0);
+            rfx = (int64_t)(((double)a->r * (double)e0dx + (double)b->r * (double)e1dx + (double)c->r * (double)e2dx) * inv * 4294967296.0);
+            rgx = (int64_t)(((double)a->g * (double)e0dx + (double)b->g * (double)e1dx + (double)c->g * (double)e2dx) * inv * 4294967296.0);
+            rbx = (int64_t)(((double)a->b * (double)e0dx + (double)b->b * (double)e1dx + (double)c->b * (double)e2dx) * inv * 4294967296.0);
+            rax = (int64_t)(((double)a->a * (double)e0dx + (double)b->a * (double)e1dx + (double)c->a * (double)e2dx) * inv * 4294967296.0);
+            rfy = (int64_t)(((double)a->r * (double)e0dy + (double)b->r * (double)e1dy + (double)c->r * (double)e2dy) * inv * 4294967296.0);
+            rgy = (int64_t)(((double)a->g * (double)e0dy + (double)b->g * (double)e1dy + (double)c->g * (double)e2dy) * inv * 4294967296.0);
+            rby = (int64_t)(((double)a->b * (double)e0dy + (double)b->b * (double)e1dy + (double)c->b * (double)e2dy) * inv * 4294967296.0);
+            ray = (int64_t)(((double)a->a * (double)e0dy + (double)b->a * (double)e1dy + (double)c->a * (double)e2dy) * inv * 4294967296.0);
+        }
+    }
+    {
+        unsigned wrote = 0, tested = 0;
+        int64_t zr, ur, vr, rr, rg2, rb2, ra2;
+        /* The menus' triangles: depth always passes and is written, flat shading, and the source colour is the
+           texel itself (TEX0's TFX = 1 with TCC = 1, or TFX = 0 modulated by the GS's default white: 0x80 a
+           channel, and (c * 0x80) >> 7 = c). A non-white flat colour is folded into a per-triangle blend table
+           below. Only the texture coordinates are interpolated. */
+        int menu_ok = zwrite && !gouraud && wms <= 1 && wmt <= 1 && tcc && !ft->alpha_hi &&
+                      (passthrough || tfx == 0);
+        int menu_white = menu_ok && (passthrough || flatcol == 0x80808080u);
+        int repeat = (wms == 0 && wmt == 0);
+        int twm = (int)tw - 1, thm = (int)th - 1;
+        uint32_t twlog = ft->twlog;
+        uint32_t mbl[256];
+        MenuSpan mspan;
+        TriEdge se0, se1, se2;
+
+        if (menu_ok && !menu_white) {
+            menu_mod_table(mbl, ft->pal, flatcol);
+        }
+        if (menu_ok && ft->alpha_none) {
+            return 1; /* every texel is transparent: the spans would write nothing */
+        }
+        mspan.idx = ft->idx;
+        mspan.pal = ft->pal;
+        mspan.bl = menu_white ? ft->bl : mbl;
+        mspan.twlog = twlog;
+        mspan.twm = (uint32_t)twm;
+        mspan.thm = (uint32_t)thm;
+        mspan.repeat = repeat;
+        mspan.ufx = ufx;
+        mspan.vfx = vfx;
+        if (menu_ok) {
+            sMenuTri++;
+        } else if (zwrite && !gouraud && wms <= 1 && wmt <= 1) {
+            sMenuNear++; /* everything but the texture state matches: what keeps it out? */
+            sMenuNearCol = flatcol;
+        }
+
+        tri_edge_init(&se0, bx, by, cx, cy, ((int64_t)ya - 1) << 4);
+        tri_edge_init(&se1, cx, cy, ax, ay, ((int64_t)ya - 1) << 4);
+        tri_edge_init(&se2, ax, ay, bx, by, ((int64_t)ya - 1) << 4);
+        for (y = ya; y <= yb; y++) {
+            uint32_t crb = (fbp + ((uint32_t)y & ~0x1Fu) * fbw) << 6;
+            uint32_t zrb = (zbp + ((uint32_t)y & ~0x1Fu) * fbw) << 6;
+            const uint16_t *off = sOff32[y & 31], *offz = sOff32Z[y & 31];
+            int xl, xr, step;
+
+            if (tri_span(&se0, &se1, &se2, xa, xb, &xl, &xr)) {
+                step = xl - xa;
+                zr = zf + zfx * step;
+                ur = uf + ufx * step;
+                vr = vf + vfx * step;
+                rr = rf + rfx * step;
+                rg2 = rgf + rgx * step;
+                rb2 = rbf + rbx * step;
+                ra2 = raf + rax * step;
+                tested += (unsigned)(xr - xl + 1);
+                if (menu_ok) {
+                    int uvfree;
+
+                    sMenuPix += (unsigned)(xr - xl + 1);
+
+                    {
+                        int64_t ur1 = ur + ufx * (int64_t)(xr - xl), vr1 = vr + vfx * (int64_t)(xr - xl);
+
+                        uvfree = repeat ||
+                                 ((ur >> 36) >= 0 && (ur >> 36) <= twm && (ur1 >> 36) >= 0 && (ur1 >> 36) <= twm &&
+                                  (vr >> 36) >= 0 && (vr >> 36) <= thm && (vr1 >> 36) >= 0 && (vr1 >> 36) <= thm);
+                    }
+                    if (menu_white && ft->opaque) { /* every entry's alpha is 0x80: the blend is a plain copy */
+                        wrote += menu_span_opaque(&mspan, crb, off, xl, xr, uvfree, ur, vr);
+                    } else {
+                        wrote += menu_span_blend_fast(&mspan, crb, off, xl, xr, uvfree, ur, vr);
+                    }
+                } else {
+                    for (x = xl; x <= xr; x++) {
+                        uint32_t page = ((uint32_t)x >> 6) << 11;
+                        uint32_t *cw = &sVram[(crb + page + off[x & 63]) & 0xFFFFF];
+                        int uu = (int)(ur >> 36), vv = (int)(vr >> 36);
+                        uint32_t tc, col, sr, sg, sb, sa;
+
+                        if (wms == 1) {
+                            uu = uu < 0 ? 0 : uu >= (int)tw ? (int)tw - 1 : uu;
+                        } else if (wms == 0) {
+                            uu &= (int)tw - 1;
+                        } else if (wms == 2) {
+                            uu = uu < minu ? minu : uu > maxu ? maxu : uu;
+                        } else {
+                            uu = (uu & minu) | maxu;
+                        }
+                        if (wmt == 1) {
+                            vv = vv < 0 ? 0 : vv >= (int)th ? (int)th - 1 : vv;
+                        } else if (wmt == 0) {
+                            vv &= (int)th - 1;
+                        } else if (wmt == 2) {
+                            vv = vv < minv ? minv : vv > maxv ? maxv : vv;
+                        } else {
+                            vv = (vv & minv) | maxv;
+                        }
+                        if (uu < 0) uu = 0; else if (uu >= (int)tw) uu = (int)tw - 1;
+                        if (vv < 0) vv = 0; else if (vv >= (int)th) vv = (int)th - 1;
+                        tc = ft->pal[ft->idx[((uint32_t)vv << twlog) + (uint32_t)uu]];
+                        if (gouraud) {
+                            col = (uint32_t)(rr >> 32) | (uint32_t)(rg2 >> 32) << 8 | (uint32_t)(rb2 >> 32) << 16 |
+                                  (uint32_t)(ra2 >> 32) << 24;
+                        } else {
+                            col = flatcol;
+                        }
+                        {
+                            uint32_t cr = col & 0xFF, cg = (col >> 8) & 0xFF, cb = (col >> 16) & 0xFF, ca = col >> 24;
+                            uint32_t tr = tc & 0xFF, tg = (tc >> 8) & 0xFF, tb = (tc >> 16) & 0xFF, ta = tc >> 24;
+
+                            if (tfx == 0) {
+                                sr = (tr * cr) >> 7;
+                                sg = (tg * cg) >> 7;
+                                sb = (tb * cb) >> 7;
+                                sa = tcc ? (ta * ca) >> 7 : ca;
+                            } else if (tfx == 1) {
+                                sr = tr; sg = tg; sb = tb;
+                                sa = tcc ? ta : ca;
+                            } else {
+                                sr = ((tr * cr) >> 7) + ca;
+                                sg = ((tg * cg) >> 7) + ca;
+                                sb = ((tb * cb) >> 7) + ca;
+                                sa = tcc ? ta + ca : ca;
+                            }
+                            if (sr > 255) sr = 255;
+                            if (sg > 255) sg = 255;
+                            if (sb > 255) sb = 255;
+                            if (sa > 255) sa = 255;
+                        }
+                        if (sa == 128) { /* (Cs - Cd) * 0x80 >> 7 + Cd = Cs */
+                            *cw = sr | sg << 8 | sb << 16 | sa << 24;
+                        } else {
+                            uint32_t d = *cw;
+                            int dr = (int)(d & 0xFF), dg = (int)((d >> 8) & 0xFF), db = (int)((d >> 16) & 0xFF);
+                            int nr = (((int)sr - dr) * (int)sa >> 7) + dr;
+                            int ng = (((int)sg - dg) * (int)sa >> 7) + dg;
+                            int nb = (((int)sb - db) * (int)sa >> 7) + db;
+                            *cw = (uint32_t)(nr < 0 ? 0 : nr > 255 ? 255 : nr) |
+                                  (uint32_t)(ng < 0 ? 0 : ng > 255 ? 255 : ng) << 8 |
+                                  (uint32_t)(nb < 0 ? 0 : nb > 255 ? 255 : nb) << 16 | sa << 24;
+                        }
+                        if (zwrite) {
+                            uint32_t *zw = &sVram[(zrb + page + offz[x & 63]) & 0xFFFFF];
+                            *zw = zr <= 0 ? 0 : (uint32_t)(zr >> 32);
+                        }
+                        wrote++;
+                        zr += zfx; ur += ufx; vr += vfx;
+                        rr += rfx; rg2 += rgx; rb2 += rbx; ra2 += rax;
+                    }
+                }
+            }
+            zf += zfy; uf += ufy; vf += vfy;
+            rf += rfy; rgf += rgy; rbf += rby; raf += ray;
+        }
+        sf->drawn += wrote;
+        sPix[3] += wrote;
+        sTriPassed += wrote;
+        sTriTested += tested;
+#if defined(PORT_PS3)
+        if (sFrame == 1200 && tested >= 4000) {
+            fprintf(stderr, "bt3: TRIDUMP tbp=%04x tw=%u th=%u tested=%u wrote=%u opaque=%d anone=%d white=%d\n",
+                    ft->tbp, ft->tw, ft->th, tested, wrote, ft->opaque, ft->alpha_none, menu_white);
+            fflush(stderr);
+        }
+#endif
+    }
+    return 1;
 }
 
 static float edge(const Vertex *a, const Vertex *b, float x, float y) {
@@ -565,10 +1810,36 @@ static void draw_triangle(Target *sf, int ctx, const Vertex *a, const Vertex *b,
     int gouraud = (gs.prim >> 3) & 1;
     float minx = a->x, maxx = a->x, miny = a->y, maxy = a->y;
     int x, y;
+#if defined(PORT_PS3)
+    uint64_t rt0 = now_ns();
+
+    if (draw_triangle_fast(sf, ctx, a, b, c)) {
+        uint64_t dt = now_ns() - rt0;
+        sFastTri++;
+        sProfRasterNs += dt;
+        sProfTriNs += dt;
+        return;
+    }
+    if (sSlowTri == 0) {
+        sSlowTest = gs.test[ctx];
+        sSlowAlpha = gs.alpha[ctx];
+        sSlowZbuf = gs.zbuf[ctx];
+        sSlowFrame = gs.frame[ctx];
+        sSlowPrim = gs.prim;
+        sSlowTex0 = gs.tex0[ctx];
+        sSlowClamp = gs.clamp[ctx];
+    }
+    sSlowTri++;
+#endif
 
     if (area == 0.0f) {
         return;
     }
+#if defined(PORT_PS3)
+    sProfPrims++;
+    if (sf >= sTargets && sf < sTargets + 16) sProfTarget[sf - sTargets]++;
+    rt0 = now_ns();
+#endif
     if (b->x < minx) { minx = b->x; } if (c->x < minx) { minx = c->x; }
     if (b->x > maxx) { maxx = b->x; } if (c->x > maxx) { maxx = c->x; }
     if (b->y < miny) { miny = b->y; } if (c->y < miny) { miny = c->y; }
@@ -618,6 +1889,9 @@ static void draw_triangle(Target *sf, int ctx, const Vertex *a, const Vertex *b,
                         (int)(a->v * w0 + b->v * w1 + c->v * w2)));
         }
     }
+#if defined(PORT_PS3)
+    sProfRasterNs += now_ns() - rt0;
+#endif
 }
 
 static void draw_line(Target *sf, int ctx, const Vertex *a, const Vertex *b) {
@@ -819,6 +2093,9 @@ static void vertex(uint32_t x, uint32_t y, uint32_t z, int kick) {
                 draw_sprite(sf, ctx, &gs.vtx[0], &gs.vtx[1]);
                 gGsPageGen[fb]++;
                 gGsPageGen[(fb + 1) & 511]++;
+                gGsPageHash[fb] = page_mix(gGsPageHash[fb], 0x9E3779B97F4A7C15ull + gGsPageGen[fb]);
+                gGsPageHash[(fb + 1) & 511] =
+                    page_mix(gGsPageHash[(fb + 1) & 511], 0xC2B2AE3D27D4EB4Full + gGsPageGen[(fb + 1) & 511]);
             } else if (kick) {
                 if (sGpu) { GsGpu_Draw(6, ctx, gs.vtx); } else { draw_sprite(sf, ctx, &gs.vtx[0], &gs.vtx[1]); }
             }
@@ -854,13 +2131,70 @@ static void transfer_begin(void) {
 
 static uint64_t now_ns(void); /* (below) */
 
+/* The 8 KB pages an upload's rectangle can touch, as a conservative range. The pages of a buffer are a grid
+   (page width and height by pixel format, `dbw` pages across one row of pages), not a linear function of y:
+   the earlier row-bytes estimate missed pages of buffers wider than one page. */
+static void upload_page_range(uint32_t dbp, uint32_t dbw, uint32_t dpsm, uint32_t tx, uint32_t ty, uint32_t tw, uint32_t th,
+                              uint32_t *first, uint32_t *last) {
+    uint32_t bits = (uint32_t)Gs_PsmBits(dpsm);
+    uint32_t pw = bits >= 16 ? 64u : 128u;                            /* pixels across one page */
+    uint32_t ph = bits == 32 ? 32u : bits == 16 ? 64u : bits == 8 ? 64u : 128u; /* rows in one page */
+    uint32_t ppr = ((dbw ? dbw : 1u) * 64u) / pw;                     /* pages across one row of pages */
+
+    if (ppr == 0) {
+        ppr = 1;
+    }
+    *first = dbp / 32u + (ty / ph) * ppr + (tx / pw);
+    *last = dbp / 32u + ((ty + (th ? th : 1u) - 1u) / ph) * ppr + ((tx + (tw ? tw : 1u) - 1u) / pw);
+}
+
+/* A 64-bit hash of an upload's bytes. The menus stream several megabytes of textures to the GS every frame; the
+   hash lets an upload whose bytes did not change (and whose pages nothing else has written since) be skipped. */
+static uint64_t hash_bytes64(const uint8_t *p, uint32_t n) {
+    uint64_t a = 0x9E3779B97F4A7C15ull, b = 0xC2B2AE3D27D4EB4Full, v;
+    uint32_t i;
+
+    for (i = 0; i + 16 <= n; i += 16) {
+        memcpy(&v, p + i, 8);
+        a = (a ^ v) * 0x9FB21C651E98DF25ull;
+        a ^= a >> 32;
+        memcpy(&v, p + i + 8, 8);
+        b = (b ^ v) * 0x9FB21C651E98DF25ull;
+        b ^= b >> 32;
+    }
+    for (; i < n; i++) {
+        a = (a ^ p[i]) * 0x100000001B3ull;
+    }
+    v = (a ^ (b << 29 | b >> 35)) * 0x9FB21C651E98DF25ull;
+    return v ^ (v >> 32);
+}
+
+/* The last upload at each of a few (address, geometry, source-position) keys: its source hash and the page
+   generations after it. The same bytes again while those pages are untouched: nothing to write. */
+typedef struct {
+    int valid;
+    uint32_t dbp, dbw, dpsm, tx, ty, tw, th, tpos, bytes;
+    uint64_t hash, gen;
+} UpKey;
+#define UPLOAD_SLOTS 512
+static UpKey sUpCache[UPLOAD_SLOTS];
+
 static void transfer_data(const uint8_t *p, uint32_t bytes) {
     uint32_t dbp = (gs.bitbltbuf >> 32) & 0x3FFF, dbw = (gs.bitbltbuf >> 48) & 0x3F, dpsm = (gs.bitbltbuf >> 56) & 0x3F;
     uint32_t bits, total, i;
+#if defined(PORT_PS3)
+    uint64_t ut0, h = 0;
+    UpKey *upEntry = NULL;
+    uint32_t upFirst = 0, upLast = 0;
+    int fbpic; /* a picture straight into a display buffer (the menus' background movie): never cached */
+#endif
 
     if (!gs.transfer || gs.tw == 0) {
         return;
     }
+#if defined(PORT_PS3)
+    ut0 = now_ns();
+#endif
     /* A picture uploaded straight into a display buffer (the movies: page 0, 512 wide, the second buffer 448 lines
        down): the GPU back end has to copy it from GS memory into that buffer's texture at the end of the frame. */
     if (dbp == 0 && dbw == 8 && Gs_PsmBits(dpsm) == 32) {
@@ -872,15 +2206,118 @@ static void transfer_data(const uint8_t *p, uint32_t bytes) {
     }
     bits = (uint32_t)Gs_PsmBits(dpsm);
     total = gs.tw * gs.th;
+#if defined(PORT_PS3)
+    fbpic = dbp == 0 && dbw == 8 && bits == 32;
+    {   /* where the upload traffic goes: the menus re-send most of their textures every frame, and the format
+           tells whether that is a picture stream or the same small paletted textures. */
+        unsigned k = bits == 4 ? 0 : bits == 8 ? 1 : bits == 16 ? 2 : 3;
+        sUpBytesFmt[k] += bytes;
+        if (bytes >= 65536) {
+            sUpBigCount++;
+            sUpBigBytes += bytes;
+        }
+    }
+#endif
+#if defined(PORT_PS3)
+    /* The menu's 32-bit character/background textures at these pages are never sampled: every drawn triangle
+       and sprite is 8-bit paletted, and the 8-bit textures at the same pages are uploaded afterwards and
+       overwrite them. Skipping these uploads removes 2.3 MB of GS stores a frame (and stops them from
+       invalidating the 8-bit textures' page hashes). */
+    if (dpsm == 0x00 && (dbp == 0x3000 || dbp == 0x2c10)) {
+        uint32_t used = (uint32_t)((uint64_t)bytes * 8u / bits);
+
+        if (gs.tpos < total) {
+            if (used > total - gs.tpos) {
+                used = total - gs.tpos;
+            }
+            gs.tpos += used;
+        }
+        sUpSkipBytes += bytes;
+        sProfUploadNs += now_ns() - ut0;
+        return;
+    }
+    {   /* An upload whose bytes are the ones already in GS memory: skip it (and leave the pages' generations
+           alone, so the decoded textures of the fast path stay valid). The menus stream the same texture data
+           to the same addresses in every frame. */
+        uint32_t first, last, slot;
+        uint64_t gen;
+        UpKey *e;
+
+        upload_page_range(dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th, &first, &last);
+        gen = fast_pages_gen(first, last - first + 1);
+        slot = (dbp * 131u) ^ (dbw * 17u) ^ (dpsm * 7u) ^ (gs.tx * 3u) ^ (gs.ty * 5u) ^
+               (gs.tw * 11u) ^ (gs.th * 13u) ^ (gs.tpos * 19u) ^ bytes;
+        e = &sUpCache[slot & (UPLOAD_SLOTS - 1)];
+        sUpCalls++;
+        sUpBytes += bytes;
+        /* The movie pictures change every frame, so hashing them (3 MB, 2 ms) only to find them changed is
+           wasted; a value that changes per frame makes the cache miss without reading the data. */
+        h = fbpic ? page_mix((uint64_t)sFrame * 0x9E3779B97F4A7C15ull, bytes) : hash_bytes64(p, bytes);
+        if (e->valid && e->dbp == dbp && e->dbw == dbw && e->dpsm == dpsm && e->tx == gs.tx && e->ty == gs.ty &&
+            e->tw == gs.tw && e->th == gs.th && e->tpos == gs.tpos && e->bytes == bytes) {
+            if (e->hash == h && e->gen == gen) {
+                uint32_t used = (uint32_t)((uint64_t)bytes * 8u / bits);
+                if (used > total - gs.tpos) {
+                    used = total - gs.tpos;
+                }
+                gs.tpos += used;
+                sUpHits++;
+                sUpHitBytes += bytes;
+                if (sFrame == 1200 && bytes >= 65536) {
+                    fprintf(stderr, "bt3: UPLOAD hit  dbp=%04x dbw=%u psm=%02x tx=%u ty=%u tw=%u th=%u tpos=%u bytes=%u\n",
+                            dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th, gs.tpos, bytes);
+                    fflush(stderr);
+                }
+                sProfUploadNs += now_ns() - ut0;
+                return;
+            }
+            if (e->hash != h) {
+                sUpChanged++;
+                if (sFrame == 1200 && bytes >= 65536) {
+                    fprintf(stderr, "bt3: UPLOAD chg  dbp=%04x dbw=%u psm=%02x tx=%u ty=%u tw=%u th=%u tpos=%u bytes=%u\n",
+                            dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th, gs.tpos, bytes);
+                    fflush(stderr);
+                }
+            } else {
+                sUpGen++;
+                if (sFrame == 1200 && bytes >= 65536) {
+                    fprintf(stderr, "bt3: UPLOAD gen  dbp=%04x dbw=%u psm=%02x tx=%u ty=%u tw=%u th=%u tpos=%u bytes=%u\n",
+                            dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th, gs.tpos, bytes);
+                    fflush(stderr);
+                }
+            }
+        } else {
+            sUpNew++;
+            if (sFrame == 1200 && bytes >= 65536) {
+                fprintf(stderr, "bt3: UPLOAD new  dbp=%04x dbw=%u psm=%02x tx=%u ty=%u tw=%u th=%u tpos=%u bytes=%u\n",
+                        dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th, gs.tpos, bytes);
+                fflush(stderr);
+            }
+        }
+        e->valid = 0;
+        e->dbp = dbp;
+        e->dbw = dbw;
+        e->dpsm = dpsm;
+        e->tx = gs.tx;
+        e->ty = gs.ty;
+        e->tw = gs.tw;
+        e->th = gs.th;
+        e->tpos = gs.tpos;
+        e->bytes = bytes;
+        e->hash = h;
+        upEntry = e;
+        upFirst = first;
+        upLast = last;
+    }
+#endif
     /* The formats textures and palettes come in, a row at a time with the tables (the game uploads the stage's
        textures again and again in every frame: this loop was a quarter of the renderer's time). The same writes
-       as vram_rw makes. */
+       as vram_rw makes. The byte order of the source is the PS2's (a word is p[0] in the low byte), so the
+       stores assemble the host's words instead of copying bytes, which works on big-endian hosts too. */
     i = 0;
-#if !defined(PORT_PS3)
     if (dpsm == 0x00 || dpsm == 0x02 || dpsm == 0x0A || dpsm == 0x13 || dpsm == 0x14) {
         uint32_t bw = dbw ? dbw : 1, count = bytes * 8 / bits;
-        uint8_t *vram8 = (uint8_t *)sVram; /* (little-endian hosts only, as everything here) */
-        uint16_t *vram16 = (uint16_t *)sVram;
+        uint8_t *vram8 = (uint8_t *)sVram;
         while (i < count && gs.tpos < total) {
             uint32_t col = gs.tpos % gs.tw, y = gs.ty + gs.tpos / gs.tw, x = gs.tx + col, run = gs.tw - col, j;
             if (run > count - i) {
@@ -904,21 +2341,38 @@ static void transfer_data(const uint8_t *p, uint32_t bytes) {
             } else if (dpsm == 0x00) {
                 const uint16_t *in = sIn32[y & 31];
                 uint32_t base = (dbp + (y >> 5) * 32 * bw) << 6;
+                const uint8_t *q = &p[i * 4];
                 for (j = 0; j < run; j++, x++) {
-                    memcpy(&sVram[(base + ((x >> 6) << 11) + in[x & 63]) & 0xFFFFF], &p[(i + j) * 4], 4);
+                    /* The source word is the PS2's (little-endian) 32-bit colour: one load and a byte swap
+                       instead of four byte loads and shifts, which was most of the upload's time (the movie
+                       pictures are 32-bit and go straight into a display buffer). */
+                    uint32_t v;
+
+                    memcpy(&v, q + j * 4, 4);
+#if defined(PORT_PS3)
+                    v = __builtin_bswap32(v);
+#endif
+                    sVram[(base + ((x >> 6) << 11) + in[x & 63]) & 0xFFFFF] = v;
                 }
             } else {
                 const uint16_t *in = sIn16[dpsm == 0x0A][y & 63];
                 uint32_t base = (dbp + (y >> 6) * 32 * bw) << 7;
                 for (j = 0; j < run; j++, x++) {
-                    memcpy(&vram16[(base + ((x >> 6) << 12) + in[x & 63]) & 0x1FFFFF], &p[(i + j) * 2], 2);
+                    uint32_t a = (base + ((x >> 6) << 12) + in[x & 63]) & 0x1FFFFF;
+                    uint32_t *w = &sVram[a >> 1];
+                    uint32_t v;
+
+                    memcpy(&v, &p[(i + j) * 2], 2);
+#if defined(PORT_PS3)
+                    v = (uint32_t)__builtin_bswap16((uint16_t)v);
+#endif
+                    *w = (a & 1) ? (*w & 0xFFFFu) | v << 16 : (*w & 0xFFFF0000u) | v;
                 }
             }
             i += run;
             gs.tpos += run;
         }
     }
-#endif
     for (; i * bits < bytes * 8 && gs.tpos < total; gs.tpos++, i++) {
         uint32_t x = gs.tx + gs.tpos % gs.tw, y = gs.ty + gs.tpos / gs.tw, c;
 
@@ -933,12 +2387,34 @@ static void transfer_data(const uint8_t *p, uint32_t bytes) {
     }
     /* which pages changed: every page the rectangle can touch (pages are 8 KB = 32 blocks) */
     {
-        uint32_t rowbytes = (dbw ? dbw : 1) * 64 * bits / 8, first = dbp / 32 + (gs.ty * rowbytes) / 8192;
-        uint32_t last = dbp / 32 + ((gs.ty + gs.th) * rowbytes + 8191) / 8192;
+        uint32_t first, last;
+#if defined(PORT_PS3)
+        first = upFirst;
+        last = upLast;
+#else
+        upload_page_range(dbp, dbw, dpsm, gs.tx, gs.ty, gs.tw, gs.th, &first, &last);
+#endif
         for (i = first; i <= last; i++) {
             gGsPageGen[i & 511]++;
+#if defined(PORT_PS3)
+            /* The page's content hash: the hash of the last upload that covered it. (A rolling mix made the
+               hash depend on the history: an overlapping 32-bit upload followed by the same 8-bit texture
+               produced a new hash every frame, so every decoded texture was thrown away. Last-writer-wins
+               restores the same hash when the same bytes are written again; the upload cache still detects a
+               real overwrite because its generation is this hash.) */
+            gGsPageHash[i & 511] = h ^ (uint64_t)(i * 0x9E3779B9u);
+#endif
         }
+#if defined(PORT_PS3)
+        if (upEntry != NULL) {
+            upEntry->gen = fast_pages_gen(upFirst, upLast - upFirst + 1);
+            upEntry->valid = 1;
+        }
+#endif
     }
+#if defined(PORT_PS3)
+    sProfUploadNs += now_ns() - ut0;
+#endif
 }
 
 /* PRMODECONT.AC = 1: the attributes (shading, texturing, fogging, blending, ...) are PRIM's own; AC = 0: they come
@@ -1038,10 +2514,20 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc, int le) {
     static uint32_t loops, reg;     /* loops left, register index within the loop */
     const uint64_t *q = (const uint64_t *)p;
 
+    static int tagFrame = -2;
+    static unsigned dumped;
     if (!tablesReady) { tables_init(); tablesReady = 1; }
+    if (tagFrame == -2) {
+        extern int Port_Setting(const char *name, int def);
+        tagFrame = Port_Setting("test_gif_tags", -1);
+    }
+    if ((int)sFrame != tagFrame) {
+        dumped = 0;
+    }
     while (qwc != 0) {
         uint32_t flg, nreg;
 
+        sGifIters++;
         if (loops == 0) {
             sStat[3]++;
             tag_lo = gs_u64(q, le);
@@ -1050,6 +2536,13 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc, int le) {
             qwc--;
             loops = (uint32_t)(tag_lo & 0x7FFF);
             reg = 0;
+            if ((int)sFrame == tagFrame && dumped < 24) {
+                uint32_t dflg = (uint32_t)((tag_lo >> 58) & 3), dnreg = (uint32_t)((tag_lo >> 60) & 15);
+                fprintf(stderr, "bt3: GIFTAG frame=%u qwc=%u lo=%016llx hi=%016llx flg=%u nreg=%u loops=%u\n",
+                        sFrame, qwc, (unsigned long long)tag_lo, (unsigned long long)tag_hi, dflg, dnreg, loops);
+                fflush(stderr);
+                dumped++;
+            }
             if (loops != 0 && ((tag_lo >> 46) & 1) && ((tag_lo >> 58) & 3) == 0) {
                 reg_write(0, (tag_lo >> 47) & 0x7FF);
             }
@@ -1061,7 +2554,9 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc, int le) {
             nreg = 16;
         }
         if (flg == 0) { /* PACKED: one doubleword per register */
-            uint64_t value = gs_u64(q, le);
+            uint64_t value;
+            sGifPacked++;
+            value = gs_u64(q, le);
             uint64_t high = gs_u64(q + 1, le);
             uint32_t r = (tag_hi >> (4 * reg)) & 15;
 
@@ -1078,10 +2573,13 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc, int le) {
             }
         } else if (flg == 1) { /* REGLIST: two registers per doubleword */
             int half;
+            sGifReglist++;
             for (half = 0; half < 2 && loops != 0; half++) {
                 uint32_t r = (tag_hi >> (4 * reg)) & 15;
                 if (r != 0xE && r != 0xF) {
                     reg_write(r, gs_u64(q + half, le));
+                } else {
+                    sGifNop++;
                 }
                 if (++reg == nreg) {
                     reg = 0;
@@ -1092,6 +2590,7 @@ void Gs_Gif(const uint8_t *p, uint32_t qwc, int le) {
             qwc--;
         } else { /* IMAGE: the rest of the tag's quadwords are picture data, raw */
             uint32_t n = loops < qwc ? loops : qwc;
+            sGifImage++;
             sStat[6] += n;
             transfer_data((const uint8_t *)q, n * 16);
             q += 2 * n;
@@ -1120,7 +2619,15 @@ static void vif(const uint32_t *w, uint32_t count, int le) {
                 break; /* misaligned run: drop it */
             }
             sStat[2] += qwc;
+#if defined(PORT_PS3)
+            {
+                uint64_t gt0 = now_ns();
+                Gs_Gif((const uint8_t *)&w[i], qwc, le);
+                sProfGifNs += now_ns() - gt0;
+            }
+#else
             Gs_Gif((const uint8_t *)&w[i], qwc, le);
+#endif
             i += qwc * 4;
             direct -= qwc;
             continue;
@@ -1130,11 +2637,17 @@ static void vif(const uint32_t *w, uint32_t count, int le) {
                first was a fifth of all the copying of a frame; the vertex data is copied again by the unpack.) */
             const uint32_t *b = &w[i];
             uint32_t c = (pend >> 24) & 0x7F, pn = (pend >> 16) & 0xFF;
+#if defined(PORT_PS3)
+            uint64_t ut0 = now_ns();
+#endif
             if (c == 0x20) { GsVu1_SetMask(b[0]); }
             else if (c == 0x30) { GsVu1_SetRow(b); }
             else if (c == 0x31) { GsVu1_SetCol(b); }
             else if (c == 0x4A) { GsVu1_Program(pend & 0xFFFF, b, need); }
             else { GsVu1_Unpack(c, pn, pend & 0xFFFF, b); }
+#if defined(PORT_PS3)
+            sProfUnpackNs += now_ns() - ut0;
+#endif
             i += need;
             need = 0;
             continue;
@@ -1149,11 +2662,17 @@ static void vif(const uint32_t *w, uint32_t count, int le) {
             if (have == need) {
                 uint32_t c = (pend >> 24) & 0x7F, pn = (pend >> 16) & 0xFF;
                 if (need <= 2048) {
+#if defined(PORT_PS3)
+                    uint64_t ut0 = now_ns();
+#endif
                     if (c == 0x20) { GsVu1_SetMask(buf[0]); }
                     else if (c == 0x30) { GsVu1_SetRow(buf); }
                     else if (c == 0x31) { GsVu1_SetCol(buf); }
                     else if (c == 0x4A) { GsVu1_Program(pend & 0xFFFF, buf, need); }
                     else { GsVu1_Unpack(c, pn, pend & 0xFFFF, buf); }
+#if defined(PORT_PS3)
+                    sProfUnpackNs += now_ns() - ut0;
+#endif
                 }
                 need = have = 0;
             }
@@ -1464,9 +2983,32 @@ static void render_post(int job, uint32_t tadr, int tte) {
 }
 
 static uint64_t now_ns(void) {
+#if defined(PORT_PS3)
+    /* The profiling clock: the processor's timebase (mftb), calibrated once against LV2's microsecond clock.
+       sysGetSystemTime is a syscall and now_ns is called thousands of times a frame: reading it there made the
+       measured frame times several times the real ones. */
+    static uint64_t ticksPerSec, base;
+    uint32_t hi, lo;
+    uint64_t tb;
+
+    __asm__ __volatile__("mftbu %0; mftb %1" : "=r"(hi), "=r"(lo));
+    tb = ((uint64_t)hi << 32) | lo;
+    if (ticksPerSec == 0) {
+        uint64_t t0 = tb, u0 = (uint64_t)sysGetSystemTime(), u1;
+        do {
+            __asm__ __volatile__("mftbu %0; mftb %1" : "=r"(hi), "=r"(lo));
+            tb = ((uint64_t)hi << 32) | lo;
+            u1 = (uint64_t)sysGetSystemTime();
+        } while (u1 - u0 < 2000);
+        ticksPerSec = (tb - t0) * 1000000ull / (u1 - u0);
+        base = tb;
+    }
+    return (tb - base) * 1000000000ull / ticksPerSec;
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+#endif
 }
 
 /* getenv for the renderer's files (gs_internal.h): remembered per name. The names are string literals, so the
@@ -1675,6 +3217,9 @@ static void chain_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc,
        numerically and must not be swapped. Only REF blocks marked Dma_AddRefLe() come straight
        from a little-endian PS2 file. */
     int le = tag[2] == GS_REF_LE_MARKER;
+#if defined(PORT_PS3)
+    uint64_t vt0 = now_ns();
+#endif
     sStat[0]++;
 #if defined(PORT_PS3)
     if (sFrame == 0 && sStat[0] <= 8) { fprintf(stderr, "bt3: VIF block[%u] begin qwc=%u tte=%d le=%d\n", sStat[0], qwc, tte, le); fflush(stderr); }
@@ -1688,6 +3233,7 @@ static void chain_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc,
     vif(data, qwc * 4, le);
 #if defined(PORT_PS3)
     if (sFrame == 0 && sStat[0] <= 8) { fprintf(stderr, "bt3: VIF block[%u] done\n", sStat[0]); fflush(stderr); }
+    sProfVifNs += now_ns() - vt0;
 #endif
 }
 
@@ -1784,6 +3330,24 @@ static void run_chain(uint32_t tadr, int tte) {
     extern void GsGpu_ListStart(void);
 #if defined(PORT_PS3)
     uint64_t t0 = now_ns();
+    /* test_gs_skip=N: draw and present only every Nth frame, so that menus can be walked through in tests at
+       N times the speed (the software rasteriser is the slow part of the PS3 build). Game state is untouched:
+       the GS is only a picture device here, and the game never reads the picture back. */
+    {
+        static unsigned skipCount;
+        static int skip = -1;
+
+        if (skip < 0) {
+            extern int Port_Setting(const char *name, int def);
+            skip = Port_Setting("test_gs_skip", 1);
+            if (skip < 1) {
+                skip = 1;
+            }
+        }
+        if (skip > 1 && (skipCount++ % (unsigned)skip) != 0) {
+            return;
+        }
+    }
 #endif
 
     GsGpu_ListStart();
@@ -1792,12 +3356,8 @@ static void run_chain(uint32_t tadr, int tte) {
     {
         uint64_t t1 = now_ns();
         if (sFrame == 0) { fprintf(stderr, "bt3: run_chain before chain_end\n"); fflush(stderr); }
+        sProfWalkNs = t1 - t0;
         chain_end();
-        if (sFrame >= 44 && sFrame <= 70) {
-            fprintf(stderr, "bt3: CHAINTIME frame=%u walk=%.1fms end=%.1fms\n", sFrame, (double)(t1 - t0) / 1e6,
-                    (double)(now_ns() - t1) / 1e6);
-            fflush(stderr);
-        }
     }
 #else
     chain_end();
@@ -1813,7 +3373,7 @@ static void chain_end(void) {
     {
         static uint64_t last;
         uint64_t t = now_ns();
-        if (sFrame >= 40 && sFrame <= 70) {
+        if ((sFrame % 10) == 0) {
             fprintf(stderr, "bt3: FRAMETIME frame=%u dt=%.1fms\n", sFrame, last != 0 ? (double)(t - last) / 1e6 : 0.0);
             fflush(stderr);
         }
@@ -1867,6 +3427,7 @@ static void chain_end(void) {
         uint32_t fbw = (uint32_t)((fr >> 16) & 0x3F);
         uint32_t fpsm = (uint32_t)((fr >> 24) & 0x3F);
         int finished = sFinish;
+        uint64_t st0;
 
         int sample;
         sFinish = 0;
@@ -1895,20 +3456,21 @@ static void chain_end(void) {
             fflush(stderr);
         }
         if (finished && fbw == 8 && fpsm == 0) {
+            st0 = now_ns();
             Gs_StoreImage(fbp * 32, 512, 448, rgb);
+            sProfStoreNs = now_ns() - st0;
             if (sample) {
                 unsigned long long sum = 0; int k;
                 for (k = 0; k < 512 * 448 * 3; k++) sum += rgb[k];
                 fprintf(stderr, "bt3: LIST %u present sum=%llu first=%u,%u,%u\n", sLists, sum, rgb[0], rgb[1], rgb[2]);
                 fflush(stderr);
             }
+            st0 = now_ns();
             Port_Ps3VideoPresent(rgb, 512, 448);
+            sProfPresentNs = now_ns() - st0;
         }
     }
 #endif
-    memset(sPix, 0, sizeof(sPix));
-    memset(sStat, 0, sizeof(sStat));
-    sTriTested = sTriPassed = 0;
 #if defined(PORT_PS3)
     if (sFrame == 0) { Port_StageTrace("chain_end: after clear"); Port_StageTrace("chain_end: before VU frame end"); }
 #endif
@@ -1928,7 +3490,128 @@ static void chain_end(void) {
     }
     sMissingTex = 0;
 #if defined(PORT_PS3)
+    if ((sFrame % 10) == 0) {
+        extern uint64_t gDrawVuNs;
+        {
+            /* Once: what this emulator gives us for a plain integer loop, to tell a slow loop from slow
+               emulation. About four instructions an iteration. */
+            static int done;
+            if (!done) {
+                static uint8_t ctex[65536];
+                static uint32_t cpal[256];
+                static uint32_t cbig[1 << 20], csmall[1 << 14];
+                volatile uint32_t sink;
+                uint32_t a = 1, b = 3, i;
+                uint64_t c0;
+
+                done = 1;
+                for (i = 0; i < 65536u; i++) {
+                    ctex[i] = (uint8_t)i;
+                }
+                for (i = 0; i < 256u; i++) {
+                    cpal[i] = i * 0x010101u;
+                }
+                c0 = now_ns();
+                for (i = 0; i < 10000000u; i++) {
+                    a = a * 1664525u + 1013904223u;
+                    b += a >> 16;
+                }
+                sink = a ^ b;
+                fprintf(stderr, "bt3: CAL reg 10M %.1fms\n", (double)(now_ns() - c0) / 1e6);
+                /* The pixel loop's memory pattern, into a 4 MB buffer (the frame buffer's size) and into a 64 KB
+                   one (which fits a cache), to see what the stores and texture loads cost by themselves. */
+                c0 = now_ns();
+                for (i = 0; i < 10000000u; i++) {
+                    cbig[i & 0xFFFFF] = cpal[ctex[i & 0xFFFF] & 255];
+                }
+                c0 = now_ns() - c0;
+                sink = cbig[12345];
+                fprintf(stderr, "bt3: CAL mem4M 10M %.1fms\n", (double)c0 / 1e6);
+                c0 = now_ns();
+                for (i = 0; i < 10000000u; i++) {
+                    csmall[i & 0x3FFF] = cpal[ctex[i & 0xFFFF] & 255];
+                }
+                c0 = now_ns() - c0;
+                sink = csmall[123];
+                (void)sink;
+                fprintf(stderr, "bt3: CAL mem64K 10M %.1fms\n", (double)c0 / 1e6);
+                fflush(stderr);
+            }
+        }
+        fprintf(stderr, "bt3: PROF frame=%u walk=%.1fms raster=%.1fms dec=%.1fms upload=%.1fms store=%.1fms present=%.1fms "
+                        "tri=%.1fms spr=%.1fms menu(t=%u p=%u near=%u col=%08x) "
+                        "vif=%.1fms gif=%.1fms unpack=%.1fms vu=%.1fms "
+                        "prims=%u sprites=%u pix(w=%u out=%u) tri(t=%u p=%u f=%u s=%u) spr(f=%u s=%u) tex(4=%u 8=%u 16=%u 32=%u) blend=%u depth=%u alpha=%u mask=%u "
+                        "dfunc=%u,%u,%u,%u dwrite=%u tgts=%u,%u,%u,%u,%u miss=%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u "
+                        "stat(t=%u v=%u d=%u g=%u r=%u vt=%u i=%u) gifit=%u p=%u rl=%u im=%u nop=%u "
+                        "ftx(dec=%u pal=%u hit=%u tex=%u rej=%u,%u,%u,%u,%u) up(calls=%u hits=%u new=%u chg=%u gen=%u bytes=%llu hitbytes=%llu) "
+                        "upfmt(4=%llu 8=%llu 16=%llu 32=%llu big=%u/%llu skip=%llu)\n",
+                sFrame, (double)sProfWalkNs / 1e6, (double)sProfRasterNs / 1e6, (double)sProfDecodeNs / 1e6,
+                (double)sProfUploadNs / 1e6,
+                (double)sProfStoreNs / 1e6, (double)sProfPresentNs / 1e6,
+                (double)sProfTriNs / 1e6, (double)sProfSprNs / 1e6,
+                sMenuTri, sMenuPix, sMenuNear, sMenuNearCol,
+                (double)sProfVifNs / 1e6,
+                (double)sProfGifNs / 1e6, (double)sProfUnpackNs / 1e6, (double)gDrawVuNs / 1e6,
+                sProfPrims, sProfSprites,
+                sPix[3], sPix[0], sTriTested, sTriPassed, sFastTri, sSlowTri, sFastSpr, sSlowSpr,
+                sProfTex[0], sProfTex[1], sProfTex[2], sProfTex[3],
+                sProfBlend, sProfDepth, sProfAlpha, sProfMask,
+                sProfDepthFunc[0], sProfDepthFunc[1], sProfDepthFunc[2], sProfDepthFunc[3], sProfDepthWrite,
+                sProfTarget[0], sProfTarget[1], sProfTarget[2], sProfTarget[3], sProfTarget[4],
+                sFastMiss[0], sFastMiss[1], sFastMiss[2], sFastMiss[3], sFastMiss[4], sFastMiss[5], sFastMiss[6], sFastMiss[7],
+                sFastMiss[8], sFastMiss[9], sFastMiss[10], sFastMiss[11], sFastMiss[12], sFastMiss[13],
+                sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5], sStat[6],
+                sGifIters, sGifPacked, sGifReglist, sGifImage, sGifNop,
+                sFastTexDecodes, sFastTexPals, sFastTexHits, sFastTexTexels, sFastTexReject[0], sFastTexReject[1], sFastTexReject[2],
+                sFastTexReject[3], sFastTexReject[4],
+                sUpCalls, sUpHits, sUpNew, sUpChanged, sUpGen,
+                (unsigned long long)sUpBytes, (unsigned long long)sUpHitBytes,
+                (unsigned long long)sUpBytesFmt[0], (unsigned long long)sUpBytesFmt[1],
+                (unsigned long long)sUpBytesFmt[2], (unsigned long long)sUpBytesFmt[3],
+                sUpBigCount, (unsigned long long)sUpBigBytes, (unsigned long long)sUpSkipBytes);
+        fflush(stderr);
+        fprintf(stderr, "bt3: SPRSTATE test=%llx alpha=%llx zbuf=%llx frame=%llx prim=%llx tex0=%llx clamp=%llx\n",
+                (unsigned long long)sSlow2Test, (unsigned long long)sSlow2Alpha, (unsigned long long)sSlow2Zbuf,
+                (unsigned long long)sSlow2Frame, (unsigned long long)sSlow2Prim, (unsigned long long)sSlow2Tex0,
+                (unsigned long long)sSlow2Clamp);
+        fprintf(stderr, "bt3: TRISTATE test=%llx alpha=%llx zbuf=%llx frame=%llx prim=%llx tex0=%llx clamp=%llx\n",
+                (unsigned long long)sTriTest, (unsigned long long)sTriAlpha, (unsigned long long)sTriZbuf,
+                (unsigned long long)sTriFrame, (unsigned long long)sTriPrim, (unsigned long long)sTriTex0,
+                (unsigned long long)sTriClamp);
+        fprintf(stderr, "bt3: SLOWTRI test=%llx alpha=%llx zbuf=%llx frame=%llx prim=%llx tex0=%llx clamp=%llx\n",
+                (unsigned long long)sSlowTest, (unsigned long long)sSlowAlpha, (unsigned long long)sSlowZbuf,
+                (unsigned long long)sSlowFrame, (unsigned long long)sSlowPrim, (unsigned long long)sSlowTex0,
+                (unsigned long long)sSlowClamp);
+        fflush(stderr);
+    }
+    memset(sProfTex, 0, sizeof(sProfTex));
+    memset(sProfTarget, 0, sizeof(sProfTarget));
+    memset(sProfDepthFunc, 0, sizeof(sProfDepthFunc));
+    memset(sFastMiss, 0, sizeof(sFastMiss));
+    memset(sFastTexReject, 0, sizeof(sFastTexReject));
+    sProfBlend = sProfDepth = sProfAlpha = sProfMask = sProfPrims = sProfSprites = sProfDepthWrite = 0;
+    sFastTri = sSlowTri = sFastSpr = sSlowSpr = 0;
+    sProfRasterNs = sProfUploadNs = sProfWalkNs = sProfStoreNs = sProfPresentNs = sProfDecodeNs = 0;
+    sProfTriNs = sProfSprNs = 0;
+    sMenuTri = sMenuPix = sMenuNear = 0;
+    sProfVifNs = sProfGifNs = sProfUnpackNs = 0;
+    sGifIters = sGifPacked = sGifReglist = sGifImage = sGifNop = 0;
+    sFastTexDecodes = sFastTexPals = sFastTexHits = sFastTexTexels = 0;
+    sUpCalls = sUpHits = sUpNew = sUpChanged = sUpGen = 0;
+    sUpBytes = sUpHitBytes = 0;
+    memset(sUpBytesFmt, 0, sizeof(sUpBytesFmt));
+    sUpBigCount = 0;
+    sUpBigBytes = 0;
+    sUpSkipBytes = 0;
+    memset(sPix, 0, sizeof(sPix));
+    memset(sStat, 0, sizeof(sStat));
+    sTriTested = sTriPassed = 0;
     if (sFrame == 0) { fprintf(stderr, "bt3: chain_end returned\n"); fflush(stderr); }
+#else
+    memset(sPix, 0, sizeof(sPix));
+    memset(sStat, 0, sizeof(sStat));
+    sTriTested = sTriPassed = 0;
 #endif
 }
 
@@ -1946,11 +3629,11 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
     unsigned fbp = bp / 0xE00 * 0x70, y0 = bp % 0xE00 / 8, x, y;
 
     if (w > 512) { w = 512; }
-    memset(rgb, 0, (size_t)w * h * 3);
     if (getenv("BT3_GS_VERBOSE") != NULL || getenv("BT3_STORE_LOG") != NULL) {
         fprintf(stderr, "gs: frame %u: the game reads %ux%u back from buffer %#x, row %u\n", sFrame, w, h, fbp, y0);
     }
     if (sGpu) {
+        memset(rgb, 0, (size_t)w * h * 3); /* (left black if the card's copy is not there) */
         if (Gs_RenderThreaded() && GsGpu_BackendIsGl()) {
             return; /* (OpenGL on the render thread: its context is that thread's; the game gets black, as before) */
         }
@@ -1984,9 +3667,16 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
             }
         }
     } else if (gs_mode() != NULL) {
+        /* The frame's own layout, straight from the address tables: this readback was 229k vram_rw calls a frame.
+           (Only ever the 32-bit 512-wide picture: chain_end asks for it only then.) */
+        if (y0 + h > 448) {
+            memset(rgb, 0, (size_t)w * h * 3); /* (the rows past the buffer's end stay black) */
+        }
         for (y = 0; y < h && y0 + y < 448; y++) {
+            const uint16_t *off = sOff32[(y0 + y) & 31];
+            uint32_t rowbase = (((uint32_t)fbp << 5) + ((uint32_t)(y0 + y) & ~0x1Fu) * 8u) << 6;
             for (x = 0; x < w; x++) {
-                uint32_t c = vram_rw(fbp << 5, 8, 0, x, y0 + y, 0, 0);
+                uint32_t c = sVram[(rowbase + (((uint32_t)x >> 6) << 11) + off[x & 63]) & 0xFFFFF];
 #if defined(PORT_PS3)
                 rgb[(y * w + x) * 3 + 0] = (uint8_t)c;
                 rgb[(y * w + x) * 3 + 1] = (uint8_t)(c >> 8);
@@ -1996,5 +3686,7 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
 #endif
             }
         }
+    } else {
+        memset(rgb, 0, (size_t)w * h * 3);
     }
 }

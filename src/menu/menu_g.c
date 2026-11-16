@@ -3,6 +3,9 @@
 #include "sys/pad.h"
 #include "sys/save.h"
 #include "sys/common.h"
+#if defined(PORT_PS3)
+extern void File_ConvertNestedPack(void *pack, u32 maxCount);
+#endif
 
 ItemPanel *gItemPanel[2] = {NULL, NULL}; /* 0x3B38E0, one per side */
 #ifdef PORT
@@ -44,6 +47,10 @@ void ItemPanel_Init(u32 *pack, s32 side) {
     ItemPanel *p;
     s32 i;
 
+#if defined(PORT_PS3)
+    { extern void Port_HeapCheck(const char *where); Port_HeapCheck("ItemPanel_Init: enter"); }
+    File_ConvertNestedPack(pack, 0x1000);
+#endif
     gItemPanel[side] = Heap_Alloc(sizeof(*gItemPanel[side]), 0x20, 0, 2);
     memset(gItemPanel[side], 0, sizeof(*gItemPanel[side]));
     p = gItemPanel[side];

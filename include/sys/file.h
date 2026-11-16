@@ -111,6 +111,8 @@ void *File_LoadSync(s32 id, void *buf, s32 unused);
 void File_FixPackTable(void *pack);
 #if defined(PORT_PS3)
 void File_SwapWordsLe(void *start, void *end);
+void File_ConvertNestedPack(void *pack, u32 maxCount);
+void File_ConvertListLe(void *pack, u32 section, u32 maxCount, u32 stride);
 #endif
 s32 File_GetSize(s32 id);
 ADXF File_OpenById(s32 id);

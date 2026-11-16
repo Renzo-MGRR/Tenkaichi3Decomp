@@ -1401,32 +1401,51 @@ extern s32 Dialog_HasChoices(void);
 u32 Port_AutoPadButtons(void) {
     static s32 sOpenFrames;
     static s32 sMenuFrames;
+    static s32 sDuelFrames;
     static s32 sHistFrames;
+    static s32 sMenuAuto = -1;
     extern s32 Port_MainMenuReady(void);
     extern s32 Port_ProgressMode(void);
     s32 mode = Port_ProgressMode();
     s32 st;
 
-    if (gProgress != NULL && mode == 4) {
-        /* The main menu: once it has finished opening, press Cross on the highlighted entry (Dragon History on a
-           fresh save). One pulse a second at most: the menu changes the mode as soon as the choice is taken. */
+    if (sMenuAuto < 0) {
+        extern int Port_Setting(const char *name, int def);
+        sMenuAuto = Port_Setting("test_menu_auto", 0);
+    }
+    if (sMenuAuto && gProgress != NULL && mode == 4) {
+        /* The main menu: once it has finished opening, move the cursor from Dragon History (item 0) down to Duel
+           (item 3) and take it. Three Down pulses, then Cross; the pad harness turns a held button into one
+           1-frame press every 6 frames, so 18 frames are exactly three presses. Confirm is edge-triggered
+           (gamePressed), so holding Cross cannot choose twice. */
         if (!Port_MainMenuReady()) {
             sMenuFrames = 0;
             return 0;
         }
         sMenuFrames++;
-        if (sMenuFrames < 30) {
-            return 0;
+        if (sMenuFrames < 18) {
+            return PADG_DOWN;
         }
-        return ((sMenuFrames - 30) % 60) < 6 ? PADG_CROSS : 0;
+        return PADG_CROSS;
     }
     sMenuFrames = 0;
-    if (gProgress != NULL && mode >= 6 && mode <= 10) {
+    if (sMenuAuto && gProgress != NULL && mode >= 38 && mode <= 40) {
+        /* Duel: the versus menu and the character/stage select open on usable defaults (1P vs CPU, single battle,
+           the first stage), so confirm each screen. A battle keeps mode 39 while it runs; Cross there is the
+           attack button, which is harmless for the test. */
+        sDuelFrames++;
+        if (sDuelFrames < 2) {
+            return 0;
+        }
+        return PADG_CROSS;
+    }
+    sDuelFrames = 0;
+    if (sMenuAuto && gProgress != NULL && mode >= 6 && mode <= 10) {
         /* Dragon History: the guide dialogues wait for their voice line to end (the PS3 has no voice playback
            yet), so confirm every step. Cross takes the saga menu's entries and Start skips the description
            narration (MODEMENU_STEP_NARR_WAIT only handles Start / Circle, never Cross). */
         sHistFrames++;
-        if (sHistFrames < 12) {
+        if (sHistFrames < 2) {
             return 0;
         }
         return PADG_CROSS | PADG_START;

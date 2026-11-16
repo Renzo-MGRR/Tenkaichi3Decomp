@@ -207,6 +207,10 @@ void MainMenu_Init(s32 section) {
     Flash_Create(&gMainMenu->flash[0], MPACK_AT(gMainMenu->res, 20), gMainMenu->tex);
     Flash_Play(&gMainMenu->flash[0], 1);
 #if defined(PORT_PS3)
+    /* The opening movie is 308 frames. The PS3 test harness does not need to watch it, and the software GS
+       runs it at well under one frame per second on RPCS3, so jump straight to the frame that enables input. */
+    Flash_GotoLabel(&gMainMenu->flash[0], "fl_skip", 1);
+    { extern void Port_StageTrace(const char *what); Port_StageTrace("MainMenu: skipped intro"); }
     { extern void Port_HeapCheck(const char *where); Port_HeapCheck("HeapCheck: after Flash_Create"); }
 #endif
     MM_RES(23);
@@ -283,7 +287,7 @@ void MainMenu_Init(s32 section) {
 #if defined(PORT_PS3)
 /* The PS3 test harness (src/sys/mcflow_a.c) asks when the menu has finished opening and takes input. */
 s32 Port_MainMenuReady(void) {
-    return gMainMenu != NULL && (gMainMenu->flags & MAINMENU_GREETED) != 0;
+    return gMainMenu != NULL && (gMainMenu->flash[0].flags & MFLASH_PAD) != 0;
 }
 #endif
 

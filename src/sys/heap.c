@@ -308,6 +308,21 @@ void *Heap_Alloc(s32 size, u32 align, s32 fromTail, s32 heap) {
         Port_StageTraceInt("Heap_Alloc: heap0", (long)(u32)(uintptr_t)gHeapStart[0]);
         Port_StageTraceInt("Heap_Alloc: heap0end", (long)(u32)(uintptr_t)gHeapEnd[0]);
     }
+    if (size == 0x7D0) {
+        extern void Port_StageTraceInt(const char *what, long value);
+        extern void Port_HeapCheck(const char *where);
+        Port_StageTraceInt("Heap_Alloc 7D0: heap", heap);
+        Port_StageTraceInt("Heap_Alloc 7D0: block", block != NULL ? (long)Port_Addr(block) : -1);
+        if (block != NULL) {
+            Port_StageTraceInt("Heap_Alloc 7D0: magic", (long)block->magic);
+            Port_StageTraceInt("Heap_Alloc 7D0: used", block->used);
+            Port_StageTraceInt("Heap_Alloc 7D0: size", block->size);
+            Port_StageTraceInt("Heap_Alloc 7D0: dataSize", block->dataSize);
+            Port_StageTraceInt("Heap_Alloc 7D0: data", (long)block->data);
+        }
+        Port_StageTraceInt("Heap_Alloc 7D0: ret", data != NULL ? (long)Port_Addr(data) : -1);
+        Port_HeapCheck("Heap_Alloc 7D0: heap before alloc");
+    }
 #endif
     return data;
 }

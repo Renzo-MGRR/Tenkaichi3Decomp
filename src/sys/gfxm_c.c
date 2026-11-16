@@ -377,6 +377,10 @@ void FlashTl_TagActions(FlashTl *tl, u8 *data, s32 *ofs) {
             Flash_ReadString(url, data, ofs);
             Flash_ReadString(arg, data, ofs);
             if (strcmp(url, "pad") == 0) {
+#if defined(PORT_PS3)
+                { extern void Port_StageTraceInt(const char *what, long value);
+                  Port_StageTraceInt(strcmp(arg, "true") == 0 ? "FlashTl: pad true at" : "FlashTl: pad false at", tl->frame); }
+#endif
                 if (strcmp(arg, "true") == 0) {
                     tl->owner->flags |= FLASH_PAD;
                 } else if (strcmp(arg, "false") == 0) {
@@ -495,6 +499,10 @@ void FlashTl_Advance(FlashTl *tl, u32 count, u8 children, u8 force) {
                 }
                 tl->frame = target;
                 tl->state &= ~(FLASH_TL_GOTO | FLASH_TL_SEEK | FLASH_TL_KEEP);
+#if defined(PORT_PS3)
+                { extern void Port_StageTraceInt(const char *what, long value);
+                  Port_StageTraceInt("FlashTl: seek done at", tl->frame); }
+#endif
             }
             FlashTl_RunFrame(tl, Flash_SkipNamed(tl->frames, tl->frame));
             if (!(tl->state & FLASH_TL_GOTO)) {
@@ -1438,37 +1446,7 @@ void Flash_Advance(Flash *flash) {
 
 /* Draws the movie (after the default drawing environment) unless it is hidden. */
 void Flash_Draw(Flash *flash) {
-    { extern void Port_StageTrace(const char *what); char _b[128]; snprintf(_b, sizeof(_b), "Flash_Draw called flash=%p depths=%d", (void*)flash, flash&&flash->root?flash->root->depths:0); Port_StageTrace(_b); }
     Gfx_AddDefaultEnv();
-#if defined(PORT_PS3)
-    {
-        static u32 dc;
-        dc++;
-        if (dc <= 3 || dc % 5 == 0) {
-            FlashTl *tl = flash->root;
-            int i, shapes = 0, clips = 0, vis = 0;
-            char b[192];
-            if (tl != NULL) {
-                for (i = 0; i < tl->depths; i++) {
-                    if (tl->slots[i].shape != NULL) {
-                        shapes++;
-                    }
-                    if (tl->slots[i].clip != NULL) {
-                        clips++;
-                        if (tl->slots[i].clip->flags & FLASH_CLIP_VISIBLE) {
-                            vis++;
-                        }
-                    }
-                }
-            }
-            snprintf(b, sizeof(b), "FLASHDRAW %u flags=%x depths=%d shapes=%d clips=%d vis=%d frame=%u adv=%u sdraw=%u qdraw=%u qskipA=%u qskipTex=%u",
-                     (unsigned)dc, (unsigned)flash->flags, tl != NULL ? (int)tl->depths : 0, shapes, clips, vis,
-                     tl != NULL ? (unsigned)tl->frame : 0, (unsigned)sDbgAdv, (unsigned)sDbgShapeDraw,
-                     (unsigned)sDbgQuadDraw, (unsigned)sDbgQuadSkipA, (unsigned)sDbgQuadSkipTex);
-            { extern void Port_StageTrace(const char *what); Port_StageTrace(b); }
-        }
-    }
-#endif
     if (!(flash->flags & FLASH_HIDE)) {
 #ifdef PORT
         /* widescreen menus: a versus select's roster, all of it (its cells' mask too), moved to have its bar in the

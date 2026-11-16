@@ -1,5 +1,8 @@
 #include "common.h"
 #include "menu/menu_v.h"
+#if defined(PORT_PS3)
+extern void File_ConvertNestedPack(void *pack, u32 maxCount);
+#endif
 
 /* The details page's work pointer (0x3BB144): this object owns it. */
 ItemHelp *gItemHelp = NULL;
@@ -15,6 +18,9 @@ void ItemHelp_Init(u32 *pack) {
     MTexRes *res = NULL;
     MTextBox *box;
 
+#if defined(PORT_PS3)
+    File_ConvertNestedPack(pack, 0x1000);
+#endif
     gItemHelp = Heap_Alloc(sizeof(ItemHelp), 0x20, 0, 2);
     memset(gItemHelp, 0, sizeof(ItemHelp));
 

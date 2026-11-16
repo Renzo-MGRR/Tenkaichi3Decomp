@@ -165,9 +165,11 @@ s32 BtlStage_HasFeature(u32 kind) {
 void *BtlStage_GetFileMember(s32 index) {
     u32 *file = ((BattleRes *)gCommonRes->unk20)->stage;
     u32 *ret = NULL;
+    u32 start = Port_ReadLe32(&file[3 + index]);
+    u32 end = Port_ReadLe32(&file[4 + index]);
 
-    if ((index + file)[4] != (index + file)[3]) {
-        ret = file + ((index + file)[3] >> 2);
+    if (start != end) {
+        ret = file + start / 4;
     }
     return ret;
 }

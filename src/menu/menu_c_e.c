@@ -3,6 +3,10 @@
 #include "sys/common.h"
 #include "sys/pad.h"
 #include "sys/save.h"
+#if defined(PORT_PS3)
+extern void File_ConvertNestedPack(void *pack, u32 maxCount);
+extern void File_ConvertListLe(void *pack, u32 section, u32 maxCount, u32 stride);
+#endif
 #ifdef PORT
 #include "battle/col_c.h" /* FontStyle / FONT_ALIGN_* / FONT_SHADOW_*, for the names of added stages */
 #include "plat_stages.h"  /* the manifest of added stages: their ids, names and file aliases */
@@ -531,14 +535,23 @@ void CharSel_Init(s32 section) {
     gCharSel->nameText = MPACK_AT(gCharSel->res, 43);
     gCharSel->formText = MPACK_AT(gCharSel->res, 44);
     gCharSel->chipPack = (u32 *)MPACK_AT(gCharSel->res, 45);
+#if defined(PORT_PS3)
+    File_ConvertNestedPack(gCharSel->chipPack, 0x1000);
+#endif
     for (i = 0; i < MCHR_CELL_MAX; i++) {
         CS_RES(gCharSel->chipPack, i + 1);
     }
     gCharSel->stagePack = (u32 *)MPACK_AT(gCharSel->res, 46);
+#if defined(PORT_PS3)
+    File_ConvertNestedPack(gCharSel->stagePack, 0x1000);
+#endif
     for (i = 0; i < 38; i++) {
         CS_RES(gCharSel->stagePack, i + 1);
     }
 
+#if defined(PORT_PS3)
+    File_ConvertListLe(gCharSel->res, 39, 44, 4);
+#endif
     gCharSel->stageIds = (s32 *)(MPACK_AT(gCharSel->res, 39) + 0x10);
     gCharSel->stageCount = MPACK_WORD(gCharSel->res, 39);
     StgGrid_ApplyUnlocks(&gCharSel->stageCount, gCharSel->stageIds);
@@ -607,6 +620,9 @@ void CharSel_Init(s32 section) {
         gCharSel->stageRows = (gCharSel->stageCount + STGGRID_COLS - 1) / STGGRID_COLS;
     }
 #endif
+#if defined(PORT_PS3)
+    File_ConvertListLe(gCharSel->res, 56, 28, 4);
+#endif
     gCharSel->bgmIds = (s32 *)(MPACK_AT(gCharSel->res, 56) + 0x10);
     gCharSel->bgmCount = MPACK_WORD(gCharSel->res, 56);
     BgmList_ApplyUnlocks(&gCharSel->bgmCount, gCharSel->bgmIds);
@@ -668,6 +684,9 @@ void CharSel_Init(s32 section) {
     }
 #endif
 
+#if defined(PORT_PS3)
+    File_ConvertListLe(gCharSel->res, 42, 120, 0x24);
+#endif
     gCharSel->cells[0] = (MChrCell *)(MPACK_AT(gCharSel->res, 42) + 0x10);
     gCharSel->masterCount[0] = MPACK_WORD(gCharSel->res, 42);
     gCharSel->cells[1] = gCharSel->cells[0];

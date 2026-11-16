@@ -116,10 +116,10 @@ void Port_Ps3VideoPresent(const uint8_t *rgb, uint32_t width, uint32_t height) {
     if (sContext == NULL) return;
     if (rgb == NULL || width == 0 || height == 0) return;
     sPresentCount++;
-    /* First the boot popup and logos every other frame, then (for the menu) one in ten. */
-    if (sPresentCount >= 40 && sDumpCount < 300 && width <= 680 &&
-        ((sDumpCount < 48 && (sPresentCount % 2) == 0) || (sDumpCount >= 48 && (sPresentCount % 10) == 0))) {
-        /* Debug: the raw software-GS frame, one BMP per presented frame. */
+    /* Capture only when the test harness asks for it: an automatic dump of every frame costs more than the
+       rest of the frame on RPCS3 (0.65 MB of file I/O and a full-frame checksum). */
+    if (sCaptureNext) {
+        sCaptureNext = 0;
         char path[128];
         FILE *f;
         uint32_t stride = (width * 3 + 3) & ~3u;
@@ -153,14 +153,9 @@ void Port_Ps3VideoPresent(const uint8_t *rgb, uint32_t width, uint32_t height) {
                 fwrite(row, 1, stride, f);
             }
             fclose(f);
-            {
-                uint64_t dsum = 0;
-                size_t i, n = (size_t)width * height * 3;
-                for (i = 0; i < n; i++) dsum += rgb[i];
-                fprintf(stderr, "bt3-ps3: BMPDUMP %d present=%d %ux%u sum=%llu\n", sDumpCount, sPresentCount,
-                        (unsigned)width, (unsigned)height, (unsigned long long)dsum);
-                fflush(stderr);
-            }
+            fprintf(stderr, "bt3-ps3: BMPDUMP %d present=%d %ux%u\n", sDumpCount, sPresentCount,
+                    (unsigned)width, (unsigned)height);
+            fflush(stderr);
             sDumpCount++;
         }
     }
@@ -176,7 +171,6 @@ void Port_Ps3VideoPresent(const uint8_t *rgb, uint32_t width, uint32_t height) {
     }
     back = (uint8_t)(sFront ^ 1);
     dst = sDisplay[back];
-    memset(dst, 0, sPitch * sHeight);
 
     /* The software GS produces 512 x 448; the PS2 displays that as a 4:3 picture (its pixels are not square).
        Fit it to the screen's height, keeping 4:3, and letterbox/pillarbox the rest in black. */
@@ -188,6 +182,26 @@ void Port_Ps3VideoPresent(const uint8_t *rgb, uint32_t width, uint32_t height) {
     }
     x0 = (sWidth - dw) / 2;
     y0 = (sHeight - dh) / 2;
+    /* Clear only the bars around the picture: it covers the rest, and clearing the whole 720p buffer was most
+       of the present's time. */
+    if (y0 > 0) {
+        memset(dst, 0, (size_t)sPitch * y0);
+    }
+    if (y0 + dh < sHeight) {
+        memset(dst + (size_t)(y0 + dh) * (sPitch / 4), 0, (size_t)sPitch * (sHeight - y0 - dh));
+    }
+    if (x0 > 0 || x0 + dw < sWidth) {
+        for (y = 0; y < dh; y++) {
+            uint32_t *row = dst + (size_t)(y0 + y) * (sPitch / 4);
+
+            if (x0 > 0) {
+                memset(row, 0, (size_t)x0 * 4);
+            }
+            if (x0 + dw < sWidth) {
+                memset(row + x0 + dw, 0, (size_t)(sWidth - x0 - dw) * 4);
+            }
+        }
+    }
     xstep = (width << 16) / dw;
     ystep = (height << 16) / dh;
     for (y = 0; y < dh; y++) {

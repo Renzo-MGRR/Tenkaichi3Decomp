@@ -66,6 +66,7 @@ StgAnimTable *gStgAnimTable = NULL;
 
 extern StgAnimWork *Battle_GetWork(void);
 extern void BtlStage_Init(void *stage, void *arg);
+extern void BtlStage_ConvertLe(u32 *file, void *stage);
 extern s32 BtlStage_IsObjBroken(s32 idx);
 extern void StgOfsTable_Relocate(StgAnimTable *t);
 extern void *StgOfsTable_Get(StgAnimTable *t, s32 i);
@@ -77,6 +78,9 @@ void StgModel_InitStage(void) {
     u32 *file = *(u32 **)(gCommonRes->unk20 + 4);
     void *stage = (u8 *)file + Port_ReadLe32(&file[1]) / 4 * 4;
 
+#if defined(PORT_PS3)
+    BtlStage_ConvertLe(file, stage);
+#endif
     BtlStage_Init(stage, stage);
 }
 
@@ -119,6 +123,11 @@ void StgModel_BindAnims(void) {
     s32 i;
     s32 count;
 
+#if defined(PORT_PS3)
+    /* PS3: the animation table and its VU1 packets are not converted yet. */
+    gStgAnimTable = NULL;
+    return;
+#endif
     if (file == NULL) {
         return;
     }

@@ -561,7 +561,7 @@ void BtlStage_RequestChange(void) {
 void BtlStage_BindPaths(void) {
     u8 *file = STG_RES->stage;
 
-    gStgPaths = (StgPathTable *)(file + ((u32 *)file)[0x18] / 4 * 4);
+    gStgPaths = (StgPathTable *)(file + Port_ReadLe32(&((u32 *)file)[0x18]) / 4 * 4);
     StgPathTable_Relocate(gStgPaths);
 }
 
@@ -641,7 +641,7 @@ void BtlStage_BindMef(void) {
     StgMefPoint *p;
     s32 i;
 
-    if (m != NULL && m->magic == 0x3046454D) {
+    if (m != NULL && Port_ReadLe32(&m->magic) == 0x3046454D) {
         m->list0 = (StgMefPoint *)((u8 *)m + (s32)m->list0);
         gBtlStageFxRes->list1 = (StgMefPoint *)((u8 *)m + (s32)gBtlStageFxRes->list1);
         gBtlStageFxRes->list2 = (StgMefPoint *)((u8 *)m + (s32)gBtlStageFxRes->list2);
@@ -750,9 +750,9 @@ void BtlStage_BindFile(BtlStage *stage) {
         if (file == NULL) {
             return;
         }
-        data = (u8 *)file + file[2] / 4 * 4;
-        ofs = file[0x13] / 4 * 4;
-        if (file[0x14] != file[0x13]) {
+        data = (u8 *)file + Port_ReadLe32(&file[2]) / 4 * 4;
+        ofs = Port_ReadLe32(&file[0x13]) / 4 * 4;
+        if (Port_ReadLe32(&file[0x14]) != Port_ReadLe32(&file[0x13])) {
             gBtlStageFxRes = (StgMef *)((u8 *)file + ofs);
         }
         BtlStage_BindData(stage, (StgDataA *)data);

@@ -364,29 +364,19 @@ void Dma_SendGifNoWait(u32 addr, u32 qwc) {
 }
 
 /* Sends `qwc` quadwords at `addr` on the GIF channel and waits for the transfer to finish. */
-#if defined(PORT_PS3)
-extern void Port_StageTrace(const char *what);
-#define DT(what) Port_StageTrace("Dma_SendGif: " what)
-#else
-#define DT(what) ((void)0)
-#endif
 void Dma_SendGif(u32 addr, u32 qwc) {
-    DT("wait idle");
     do {
         while (*D2_CHCR & 0x100) {
         }
     } while (*GIF_STAT & 0xC00);
-    DT("program channel");
     *D2_QWC = qwc;
     *D2_MADR = DMA_PHYS(addr);
     FlushCache(0);
     *D2_CHCR = 0x101;
-    DT("wait done");
     do {
         while (*D2_CHCR & 0x100) {
         }
     } while (*GIF_STAT & 0xC00);
-    DT("done");
 }
 
 /* Waits until the GIF channel and the GIF path are idle. */

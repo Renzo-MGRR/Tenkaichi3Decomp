@@ -296,5 +296,6 @@ void MdlTex_RebaseChain(s32 single, void *chain, s32 tbp, s32 cbp, s32 tbp2, s32
 
 void StgOctree_Relocate(StgOctNode *node, s32 *base);
 void BtlStage_Relocate(s32 *base);
+void BtlStage_ConvertLe(u32 *file, void *stage);
 
 #endif

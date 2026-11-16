@@ -265,26 +265,45 @@ void Res_RelocateOffsets(TexFile **out, u8 *base, TexFile *hdr) {
     TexEntry *e;
 
 #if defined(PORT_PS3)
-    /* A texture header and its entries are PS2 little-endian. Swap only numeric fields, leaving pixels alone. */
+    /* A texture header and its entries are PS2 little-endian. Swap only numeric fields, leaving pixels alone.
+       A texture may be relocated twice (the two item panels share their sections): after the first pass its
+       words read as native, while a little-endian header reads them byte-swapped (count << 24). */
     {
         u8 *h = (u8 *)hdr;
-        u32 count = Tex_ReadLe32(h), entOfs = Tex_ReadLe32(h + 4);
-        extern void Port_StageTraceInt(const char *what, long value);
-        Port_StageTraceInt("Reloc: hdr", (long)(u32)Port_Addr(hdr));
-        Port_StageTraceInt("Reloc: base", (long)(u32)Port_Addr(base));
-        Port_StageTraceInt("Reloc: rawCount", (long)count);
-        Port_StageTraceInt("Reloc: rawEnt", (long)entOfs);
-        Tex_StoreBe32(h, count); Tex_StoreBe32(h + 4, entOfs);
-        for (i = 0; i < count; i++) {
-            u8 *q = base + entOfs * 4 + i * sizeof(TexEntry);
-            u32 k;
-            for (k = 0; k < 10; k++) Tex_StoreBe32(q + k * 4, Tex_ReadLe32(q + k * 4));
-            {
-                u64 v = Tex_ReadLe64(q + 0x30);
-                memcpy(q + 0x30, &v, 8);
+        u32 count, entOfs, nativeCount, nativeEntOfs;
+
+        memcpy(&nativeCount, h, 4);
+        memcpy(&nativeEntOfs, h + 4, 4);
+        if (nativeCount >= 1 && nativeCount <= 0x1000 && nativeEntOfs <= 0x100000) {
+            count = nativeCount;
+            entOfs = nativeEntOfs;
+        } else {
+            count = Tex_ReadLe32(h);
+            entOfs = Tex_ReadLe32(h + 4);
+            if (count == 0 || count > 0x10000 || entOfs > 0x1000000) {
+                *out = hdr;
+                return;
+            }
+            Tex_StoreBe32(h, count); Tex_StoreBe32(h + 4, entOfs);
+            for (i = 0; i < count; i++) {
+                u8 *q = base + entOfs * 4 + i * sizeof(TexEntry);
+                u32 k;
+                for (k = 0; k < 10; k++) Tex_StoreBe32(q + k * 4, Tex_ReadLe32(q + k * 4));
+                {
+                    u64 v = Tex_ReadLe64(q + 0x30);
+                    memcpy(q + 0x30, &v, 8);
+                }
             }
         }
-        Port_StageTraceInt("Reloc: swapped", (long)count);
+        {
+            extern void Port_StageTraceInt(const char *what, long value);
+            extern void Port_HeapCheck(const char *where);
+            Port_StageTraceInt("Reloc: hdr", (long)(u32)(uintptr_t)hdr);
+            Port_StageTraceInt("Reloc: count", (long)count);
+            Port_StageTraceInt("Reloc: entOfs", (long)entOfs);
+            Port_StageTraceInt("Reloc: entEnd", (long)(u32)(uintptr_t)(base + entOfs * 4 + count * sizeof(TexEntry)));
+            Port_HeapCheck("Reloc: heap after");
+        }
     }
 #endif
     *out = hdr;

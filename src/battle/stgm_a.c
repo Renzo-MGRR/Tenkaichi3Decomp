@@ -350,6 +350,10 @@ void StgModel_Draw(void *view) {
     s32 k;
     u32 chain;
 
+#if defined(PORT_PS3)
+    /* PS3: the VIF chains and mesh matrices of the stage are not converted yet. */
+    return;
+#endif
     if (Battle_GetWork()->flags & 0x2000) {
         return;
     }

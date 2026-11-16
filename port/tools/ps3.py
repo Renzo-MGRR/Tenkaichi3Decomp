@@ -86,10 +86,22 @@ def compile_one(f, route="game", extra_cpp=(), hard_float=False):
     if r.returncode:
         return None, "clang: " + (r.stderr or r.stdout)[-500:]
     text, _ = irfix.fix(ll.read_text())
+    # clang emits the IR at -O0, which marks every function "noinline optnone": optnone tells every later pass
+    # (llc included) to leave the function alone, so every local stayed in its stack slot and the GS rasteriser
+    # ran at 158 ns a pixel. Drop both, keep noinline on the few functions that must stay out of their huge
+    # callers, and optimise here so llc gets ordinary -O2 IR.
+    text = text.replace("noinline ", "").replace(" optnone", "")
+    text = re.sub(r"(define [^\n]*@(?:menu_span_opaque|menu_span_blend(?:_fast)?|sprite_span)\([^\n]*\)) #0 \{", r"\1 #1 {", text)
+    if "#1 {" in text:
+        text += "\nattributes #1 = { noinline }\n"
     ll.write_text(text)
+    opt_ll = ll.with_suffix(".opt.ll")
+    r = subprocess.run(["opt", "-O2", "-S", str(ll), "-o", str(opt_ll)], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        return None, "opt: " + (r.stderr or r.stdout)[-600:]
     # PPC64 BE object
     r = subprocess.run(["llc", "-O2", "-filetype=obj", "-relocation-model=static", "--mtriple=powerpc64-unknown-linux-gnu",
-                        "-mattr=" + ("+hard-float" if hard_float else "-hard-float"), str(ll), "-o", str(o)], cwd=ROOT, capture_output=True, text=True)
+                        "-mattr=" + ("+hard-float" if hard_float else "-hard-float"), str(opt_ll), "-o", str(o)], cwd=ROOT, capture_output=True, text=True)
     if r.returncode:
         return None, "llc: " + (r.stderr or r.stdout)[-600:]
     return o, None

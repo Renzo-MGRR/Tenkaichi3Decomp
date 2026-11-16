@@ -108,6 +108,56 @@ void File_SwapWordsLe(void *start, void *end) {
         p += 4;
     }
 }
+
+/* A pack inside a pack (the item panels of a character select, its chip and stage icon packs): the outer
+   table was converted by File_ConvertPackHeader when the section was decoded, but these nested packs are
+   stored as they are and are still little-endian. Their size is not known here, so only the shape of the
+   table is checked. count may be larger than the 64 of an ordinary pack (the chip pack has 165 sections).
+   Idempotent: after the swap the count reads byte-swapped and exceeds maxCount. */
+void File_ConvertNestedPack(void *pack, u32 maxCount) {
+    u8 *p = pack;
+    u32 count, table, i, prev;
+
+    if (p == NULL) return;
+    count = File_ReadLe32(p);
+    if (count == 0 || count > maxCount) return;
+    table = (count + 1) * 4;
+    if (File_ReadLe32(p + 4) != ((table + 63) & ~63u)) return;
+    prev = 0;
+    for (i = 1; i <= count; i++) {
+        u32 v = File_ReadLe32(p + i * 4);
+        if (v < prev) return;
+        prev = v;
+    }
+    for (i = 0; i <= count; i++) {
+        u32 v = File_ReadLe32(p + i * 4);
+        p[i * 4] = (u8)(v >> 24);
+        p[i * 4 + 1] = (u8)(v >> 16);
+        p[i * 4 + 2] = (u8)(v >> 8);
+        p[i * 4 + 3] = (u8)v;
+    }
+}
+
+/* A section that is a plain list (the stage ids, the character cells, the song ids): a little-endian count
+   word, three unused words, then count entries of stride bytes. The game reads the count and the entries as
+   native s32, so swap them once. The section's end comes from the (already converted) pack table, so a
+   damaged count cannot run past the section. Idempotent like File_ConvertNestedPack. */
+void File_ConvertListLe(void *pack, u32 section, u32 maxCount, u32 stride) {
+    u32 *table = pack;
+    u8 *start;
+    u8 *end;
+    u32 count;
+
+    if (pack == NULL) return;
+    start = (u8 *)pack + (table[section] & ~3u);
+    end = (u8 *)pack + (table[section + 1] & ~3u);
+    if (start + 0x10 > end) return;
+    count = File_ReadLe32(start);
+    if (count == 0 || count > maxCount) return;
+    if (0x10 + count * stride > (u32)(end - start)) return;
+    File_SwapWordsLe(start, start + 4);
+    File_SwapWordsLe(start + 0x10, start + 0x10 + count * stride);
+}
 #endif
 
 /* Unused stub that returns 0. */

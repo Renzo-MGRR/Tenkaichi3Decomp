@@ -3,6 +3,10 @@
 #include "menu/menu_f.h"
 #include "sys/pad.h"
 #include "sys/save.h"
+#if defined(PORT_PS3)
+extern void File_ConvertNestedPack(void *pack, u32 maxCount);
+extern void File_ConvertListLe(void *pack, u32 section, u32 maxCount, u32 stride);
+#endif
 #ifdef PORT
 #include "battle/col_c.h" /* FontStyle / FONT_ALIGN_* / FONT_SHADOW_*, for the names of added songs */
 #include "plat_songs.h"   /* the songs added from outside the disc (the music select) */
@@ -633,15 +637,24 @@ void TeamSel_Init(s32 section) {
     gTeamSel->nameText = MPACK_AT(gTeamSel->res, 43);
     gTeamSel->formText = MPACK_AT(gTeamSel->res, 44);
     gTeamSel->chipPack = (u32 *)MPACK_AT(gTeamSel->res, 45);
+#if defined(PORT_PS3)
+    File_ConvertNestedPack(gTeamSel->chipPack, 0x1000);
+#endif
     for (i = 0; i < TS_CELL_MAX; i++) {
         res = (MTexRes *)MPACK_AT(gTeamSel->chipPack, i + 1);
         Res_RelocateOffsets(&res, res, res);
     }
     gTeamSel->stagePack = (u32 *)MPACK_AT(gTeamSel->res, 46);
+#if defined(PORT_PS3)
+    File_ConvertNestedPack(gTeamSel->stagePack, 0x1000);
+#endif
     for (i = 0; i < 38; i++) {
         res = (MTexRes *)MPACK_AT(gTeamSel->stagePack, i + 1);
         Res_RelocateOffsets(&res, res, res);
     }
+#if defined(PORT_PS3)
+    File_ConvertListLe(gTeamSel->res, 39, 44, 4);
+#endif
     gTeamSel->stageIds = (s32 *)(MPACK_AT(gTeamSel->res, 39) + 0x10);
     gTeamSel->stageCount = TS_PACK_WORD(gTeamSel->res, 39);
     StgGrid_ApplyUnlocks(&gTeamSel->stageCount, gTeamSel->stageIds);
@@ -686,6 +699,9 @@ void TeamSel_Init(s32 section) {
         }
     }
 #endif
+#if defined(PORT_PS3)
+    File_ConvertListLe(gTeamSel->res, 56, 28, 4);
+#endif
     gTeamSel->bgmIds = (s32 *)(MPACK_AT(gTeamSel->res, 56) + 0x10);
     gTeamSel->bgmCount = TS_PACK_WORD(gTeamSel->res, 56);
     BgmList_ApplyUnlocks(&gTeamSel->bgmCount, gTeamSel->bgmIds);
@@ -727,6 +743,9 @@ void TeamSel_Init(s32 section) {
             sPortSongsAdded = 1;
         }
     }
+#endif
+#if defined(PORT_PS3)
+    File_ConvertListLe(gTeamSel->res, 42, 120, 0x24);
 #endif
     gTeamSel->cells[0] = (TsCell *)(MPACK_AT(gTeamSel->res, 42) + 0x10);
     gTeamSel->masterCount[0] = TS_PACK_WORD(gTeamSel->res, 42);

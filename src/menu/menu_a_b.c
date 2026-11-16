@@ -177,6 +177,16 @@ s32 Progress_Main(s32 arg) {
     }
 #endif
     do {
+#if defined(PORT_PS3)
+        {
+            static s32 lastMode = -1;
+            if (gProgress->mode != lastMode) {
+                extern void Port_StageTraceInt(const char *what, long value);
+                lastMode = gProgress->mode;
+                Port_StageTraceInt("Progress_Main: mode", lastMode);
+            }
+        }
+#endif
         switch (gProgress->mode) {
         case 2:
 #if defined(PORT_PS3)
